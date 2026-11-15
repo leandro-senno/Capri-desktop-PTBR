@@ -478,6 +478,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
             onChanged: (value) => setState(() => _store.wander = value),
           ),
           const SizedBox(height: 6),
+          const Text('Puxa conversa quando você some por', style: TextStyle(color: Look.dim, fontSize: 13)),
+          const SizedBox(height: 6),
+          SegmentedButton<int>(
+            segments: const [
+              ButtonSegment(value: 10, label: Text('10 min')),
+              ButtonSegment(value: 30, label: Text('30 min')),
+              ButtonSegment(value: 120, label: Text('2 h')),
+              ButtonSegment(value: 0, label: Text('Nunca')),
+            ],
+            selected: {_store.nudgeMinutes},
+            onSelectionChanged: (picked) => setState(() => _store.nudgeMinutes = picked.first),
+          ),
+          const Padding(
+            padding: EdgeInsets.only(top: 6, bottom: 14),
+            child: Text('Só com o app aberto ou com ela flutuando, e nunca entre 23h e 8h.', style: TextStyle(color: Look.dim, fontSize: 12)),
+          ),
           const Text('Dorme depois de parada por', style: TextStyle(color: Look.dim, fontSize: 13)),
           const SizedBox(height: 6),
           SegmentedButton<int>(

@@ -32,5 +32,5 @@ class CapriApp extends StatelessWidget {
 @pragma('vm:entry-point')
 void overlayMain() {
   WidgetsFlutterBinding.ensureInitialized();
-  runApp(const MaterialApp(debugShowCheckedModeBanner: false, color: Colors.transparent, home: FloatingCapri()));
+  runApp(MaterialApp(debugShowCheckedModeBanner: false, color: Colors.transparent, theme: Look.theme(), home: const FloatingCapri()));
 }

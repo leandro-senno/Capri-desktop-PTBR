@@ -51,6 +51,11 @@
             <action android:name="android.intent.action.PROCESS_TEXT"/>
             <data android:mimeType="text/plain"/>
         </intent>
+        <!-- Ver os apps instalados que têm ícone, para abrir o que a pessoa pedir -->
+        <intent>
+            <action android:name="android.intent.action.MAIN"/>
+            <category android:name="android.intent.category.LAUNCHER"/>
+        </intent>
         <!-- Reconhecimento de fala e voz do sistema -->
         <intent>
             <action android:name="android.speech.RecognitionService"/>

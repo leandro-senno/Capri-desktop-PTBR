@@ -1,10 +1,13 @@
 import 'dart:async';
+import 'dart:isolate';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
 import 'brain.dart';
+import 'hands.dart';
+import 'link.dart';
 import 'look.dart';
 import 'overlay.dart';
 import 'settings_screen.dart';
@@ -38,6 +41,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Duration _glide = Duration.zero;
   Timer? _wander;
   Timer? _arrival;
+
+  // Puxar conversa e falar com a janela flutuante.
+  Timer? _nudges;
+  ReceivePort? _port;
+  DateTime _lastActivity = DateTime.now();
+  bool _foreground = true;
+  static const List<String> _nudgeLines = [
+    'Psst. Lembra de mim? Pequena, cheia de glitch, muito importante.',
+    'Tô entediada. Me diverte.',
+    'Ei. Ei. Olha pra mim.',
+    'Você tá me ignorando faz um tempão. Que feio.',
+  ];
   final Random _random = Random();
 
   Store get _store => widget.store;
@@ -52,14 +67,25 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _voice.onStart = () {
       _speaking = true;
       _capri.talking = true;
+      Link.send(Link.floating, {'type': 'talking', 'on': true});
       if (mounted) setState(() {});
     };
     _voice.onDone = () {
       _speaking = false;
       _capri.talking = false;
+      Link.send(Link.floating, {'type': 'talking', 'on': false});
       if (mounted) setState(() {});
     };
-    _voice.onShapes = _capri.lipSync;
+    _voice.onShapes = (shapes) {
+      _capri.lipSync(shapes);
+      Link.send(Link.floating, {'type': 'shapes', 'shapes': shapes});
+    };
+    // A janela flutuante manda o que a pessoa digitou lá; a resposta volta pelo mesmo fio.
+    _port = Link.listen(Link.app, (message) {
+      final text = message['text'];
+      if (message['type'] == 'ask' && text is String) _send(text);
+    });
+    _nudges = Timer.periodic(const Duration(minutes: 1), (_) => _maybeNudge());
     _voice.onProblem = (problem) {
       if (mounted) _notice(problem);
     };
@@ -155,8 +181,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
   @override
   void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      _voice.stop();
+    if (state == AppLifecycleState.resumed) {
+      _foreground = true;
+      _lastActivity = DateTime.now();
+    } else if (state == AppLifecycleState.paused) {
+      // A voz continua: ela pode estar respondendo pela janela flutuante.
+      _foreground = false;
       _voice.stopListening();
     }
   }
@@ -166,6 +196,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.removeObserver(this);
     _wander?.cancel();
     _arrival?.cancel();
+    _nudges?.cancel();
+    Link.close(Link.app, _port);
     _capri.removeListener(_moodChanged);
     _brain.cancel();
     _brain.device.unload();
@@ -184,45 +216,98 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
+  void _busy(bool value) {
+    _capri.thinking = value;
+    if (mounted) setState(() => _thinking = value);
+    if (value) Link.send(Link.floating, {'type': 'thinking'});
+  }
+
+  /// Mostra a fala dela aqui e na janela flutuante, e fala em voz alta se a voz estiver ligada.
+  void _say(Line line) {
+    _add(line);
+    Link.send(Link.floating, {'type': 'reply', 'text': line.text});
+    if (line.problem) return;
+    if (_store.voice) {
+      _voice.speak(line.text);
+    } else {
+      _capri.grin();
+    }
+  }
+
   Future<void> _send([String? heard]) async {
     final said = (heard ?? _input.text).trim();
     if (said.isEmpty || _thinking) return;
     _input.clear();
+    _lastActivity = DateTime.now();
     _capri.poke();
     await _voice.stop();
     _applySettings();
     _add(Line(true, said));
 
-    if (!_brain.ready) {
-      _add(const Line(false, Brain.offline, problem: true));
-      return;
-    }
-
     final ticket = ++_ticket;
-    setState(() => _thinking = true);
-    _capri.thinking = true;
+    _busy(true);
     try {
-      final reply = await _brain.ask(said);
-      if (!mounted || ticket != _ticket) return;
-      _capri.thinking = false;
-      setState(() => _thinking = false);
-      _add(Line(false, reply));
-      if (_store.voice) {
-        _voice.speak(reply);
+      // Primeiro as mãos: abrir app ou link, tocar música, pesquisar. Depois ela comenta o que fez.
+      final deed = await Hands.handle(said);
+      String reply;
+      var problem = false;
+      if (deed != null) {
+        reply = deed.line;
+        if (_brain.ready) {
+          try {
+            reply = await _brain.ask(said, note: deed.note);
+          } catch (_) {
+            reply = deed.line;
+          }
+        }
+      } else if (!_brain.ready) {
+        reply = Brain.offline;
+        problem = true;
       } else {
-        _capri.grin();
+        reply = await _brain.ask(said);
       }
+      if (!mounted || ticket != _ticket) return;
+      _busy(false);
+      _say(Line(false, reply, problem: problem));
     } on BrainException catch (error) {
       if (!mounted || ticket != _ticket) return;
-      _capri.thinking = false;
-      setState(() => _thinking = false);
-      _add(Line(false, error.message, problem: true));
+      _busy(false);
+      _say(Line(false, error.message, problem: true));
     } catch (_) {
       if (!mounted || ticket != _ticket) return;
-      _capri.thinking = false;
-      setState(() => _thinking = false);
-      _add(const Line(false, Brain.declined, problem: true));
+      _busy(false);
+      _say(const Line(false, Brain.declined, problem: true));
     }
+  }
+
+  /// Quando a pessoa some por um tempo, ela puxa conversa (como os check-ins do PC).
+  Future<void> _maybeNudge() async {
+    final gap = _store.nudgeMinutes;
+    if (!mounted || gap <= 0 || _thinking || _speaking || _listening) return;
+    final now = DateTime.now();
+    if (now.hour >= 23 || now.hour < 8) return;
+    if (now.difference(_lastActivity).inMinutes < gap) return;
+    var floating = false;
+    try {
+      floating = await FlutterOverlayWindow.isActive();
+    } catch (_) {}
+    if (!mounted || (!_foreground && !floating)) return;
+    _lastActivity = now;
+    _applySettings();
+    var line = _nudgeLines[_random.nextInt(_nudgeLines.length)];
+    if (_brain.ready) {
+      final ticket = ++_ticket;
+      _busy(true);
+      try {
+        line = await _brain.ask(Brain.nudge);
+      } catch (_) {
+        // sem cérebro agora: usa uma das falas prontas
+      }
+      if (!mounted || ticket != _ticket) return;
+      _busy(false);
+    }
+    _capri.poke();
+    _say(Line(false, line));
   }
 
   Future<void> _toggleMic() async {

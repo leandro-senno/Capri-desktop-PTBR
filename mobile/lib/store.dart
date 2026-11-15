@@ -108,6 +108,10 @@ class Store {
   bool get gpuTrying => _prefs.getBool('gpu_trying') ?? false;
   Future<void> setGpuTrying(bool value) => _prefs.setBool('gpu_trying', value);
 
+  /// De quantos em quantos minutos de silêncio ela puxa conversa (0 = nunca).
+  int get nudgeMinutes => _prefs.getInt('nudge_minutes') ?? 30;
+  set nudgeMinutes(int value) => _prefs.setInt('nudge_minutes', value);
+
   /// Ela passeia e senta sozinha.
   bool get wander => _prefs.getBool('wander') ?? true;
   set wander(bool value) => _prefs.setBool('wander', value);

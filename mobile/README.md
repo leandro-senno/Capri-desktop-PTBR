@@ -10,6 +10,9 @@ Versão de bolso da Capri, refeita em Flutter a partir do app de Windows deste r
 - **Cérebro por chave**, como alternativa: chave grátis da NVIDIA, ou OpenAI, Anthropic e DeepSeek. A chave fica no cofre do Android.
 - **Flutuar sobre outros apps**: o botão de janela na barra solta ela por cima do que estiver aberto, com as mesmas animações: dois toques para sentar ou levantar, segurar e arrastar para mover (ela fica pendurada), segurar parada para dançar, e ela passeia pela tela sozinha. Toque no botão de novo para guardar.
 - **Voz da ElevenLabs** (opcional): com a sua chave, ela fala pela API com a voz que você escolher, e a boca acompanha o áudio como no PC. Sem chave, usa a voz pt-BR do Android.
+- **Mãos**: peça "abre o WhatsApp", "abre youtube.com", "toca Linkin Park no Spotify" ou "pesquisa a previsão do tempo em São Paulo". Ela abre o app ou o link, pede a música ao Spotify, YouTube ou YouTube Music, ou pesquisa no DuckDuckGo e responde com o que achou.
+- **Puxa conversa**: se você some por um tempo (10 min, 30 min ou 2 h, ou nunca), ela chama, com o app aberto ou flutuando, fora do horário de 23h às 8h.
+- **Conversa pela janela flutuante**: toque nela para abrir o balão e o campo de texto. Quem responde é o app, então ele precisa continuar aberto ao fundo.
 - **Mainframe** (ícone do chip): chave e modelo, voz, apelido, tamanho das respostas e tempo até dormir.
 
 ## O que veio do original

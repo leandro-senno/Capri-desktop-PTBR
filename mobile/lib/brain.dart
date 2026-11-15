@@ -201,9 +201,19 @@ class Brain {
   }
 
   /// Manda a fala da pessoa e devolve a resposta da Capri.
-  Future<String> ask(String said) => local ? _askLocal(said) : _askCloud(said);
+  /// [note] é uma instrução extra só para esta resposta (por exemplo, o resultado de algo que ela acabou de fazer).
+  Future<String> ask(String said, {String? note}) => local ? _askLocal(said, note) : _askCloud(said, note);
 
-  Future<String> _askLocal(String said) async {
+  /// O que ela diz quando resolve puxar conversa sozinha.
+  static const String nudge =
+      "(They've been quiet for a while. Say one short line to pull them back into chatting: tease them, ask about their day or what they're doing. Don't mention this note.)";
+
+  String _system(String? note) {
+    final base = character(nickname: nickname, wordiness: wordiness);
+    return note == null ? base : '$base\n$note';
+  }
+
+  Future<String> _askLocal(String said, String? note) async {
     if (!localReady) throw BrainException(offline);
     // As últimas trocas, para a sessão do modelo recomeçar sem perder o fio.
     final recent = _history.length > 6 ? _history.sublist(_history.length - 6) : _history;
@@ -213,7 +223,7 @@ class Brain {
     String reply;
     try {
       if (guarded) await gpuGuard?.call(true);
-      reply = await device.ask(system: character(nickname: nickname, wordiness: wordiness), said: said, limit: limit, gpu: gpu, recap: recap);
+      reply = await device.ask(system: _system(note), said: said, limit: limit, gpu: gpu, recap: recap);
     } on TimeoutException {
       throw BrainException('Demorei demais pensando. Tente de novo, ou use uma chave nas configurações.');
     } catch (error) {
@@ -231,7 +241,7 @@ class Brain {
     return reply;
   }
 
-  Future<String> _askCloud(String said) async {
+  Future<String> _askCloud(String said, String? note) async {
     final kind = this.kind;
     final key = this.key;
     final model = this.model;
@@ -239,7 +249,7 @@ class Brain {
 
     _history.add({'role': 'user', 'content': said});
     _trim();
-    final system = character(nickname: nickname, wordiness: wordiness);
+    final system = _system(note);
     final limit = [512, 800, 1400][wordiness.clamp(0, 2).toInt()];
 
     final Uri address;
