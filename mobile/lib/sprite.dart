@@ -102,6 +102,8 @@ class CapriController extends ChangeNotifier {
   bool _thinking = false;
   int _mouth = -1;
   double _mouthClock = 0;
+  double _talkClock = 0;
+  List<int>? _shapes;
   final Random _random = Random();
 
   /// Depois de quantos segundos parada ela dorme (0 = nunca).
@@ -173,9 +175,19 @@ class CapriController extends ChangeNotifier {
     if (_talking == value) return;
     _talking = value;
     _quiet = 0;
-    if (!value) _mouth = -1;
+    _talkClock = 0;
+    if (!value) {
+      _mouth = -1;
+      _shapes = null;
+    }
     if (_reel == Reel.sleep) _play(Reel.wake);
     notifyListeners();
+  }
+
+  /// As formas da boca medidas no áudio (12 por segundo), para ela falar em sincronia com a voz.
+  void lipSync(List<int> shapes) {
+    _shapes = shapes.isEmpty ? null : shapes;
+    _talkClock = 0;
   }
 
   set dragging(bool value) {
@@ -264,7 +276,12 @@ class CapriController extends ChangeNotifier {
       }
     }
 
-    if (_talking && _reel == Reel.idle) {
+    if (_talking) _talkClock += delta;
+    final shapes = _shapes;
+    if (_talking && _reel == Reel.idle && shapes != null) {
+      final index = (_talkClock * Reel.mouth.fps).floor();
+      _mouth = index < shapes.length ? shapes[index].clamp(-1, Reel.mouth.count - 1).toInt() : -1;
+    } else if (_talking && _reel == Reel.idle) {
       _mouthClock += delta;
       if (_mouthClock >= 1 / Reel.mouth.fps) {
         _mouthClock = 0;
@@ -275,6 +292,8 @@ class CapriController extends ChangeNotifier {
       _mouth = -1;
     }
 
+    // Quem monta a tela em volta dela (palco, janela flutuante) precisa saber quando a pose muda.
+    if (_reel != beforeReel) notifyListeners();
     return frame != beforeFrame || _reel != beforeReel || _mouth != beforeMouth;
   }
 }

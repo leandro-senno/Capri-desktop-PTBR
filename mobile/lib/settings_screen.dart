@@ -5,6 +5,7 @@ import 'brain.dart';
 import 'local_brain.dart';
 import 'look.dart';
 import 'store.dart';
+import 'voice.dart';
 
 /// O "Mainframe" do celular: cérebro, voz e jeito dela.
 class SettingsScreen extends StatefulWidget {
@@ -27,6 +28,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _noteBad = false;
   bool _busy = false;
   bool _hidden = true;
+  late final TextEditingController _voiceKey;
+  final Voice _tester = Voice();
+  List<VoiceEntry> _voices = [];
+  List<String> _voiceModels = [];
+  String? _voiceNote;
+  bool _voiceBad = false;
+  bool _voiceBusy = false;
+  bool _voiceHidden = true;
   bool _installing = false;
   int _percent = 0;
   String? _localNote;
@@ -39,6 +48,14 @@ class _SettingsScreenState extends State<SettingsScreen> {
     super.initState();
     _key = TextEditingController(text: _store.key ?? '');
     _nickname = TextEditingController(text: _store.nickname ?? '');
+    _voiceKey = TextEditingController(text: _store.voiceKey ?? '');
+    final voiceId = _store.voiceId;
+    if (voiceId != null) _voices = [VoiceEntry(voiceId, _store.voiceName ?? voiceId)];
+    final voiceModel = _store.voiceModel;
+    if (voiceModel != null) _voiceModels = [voiceModel];
+    _tester.onProblem = (problem) {
+      if (mounted) setState(() { _voiceNote = problem; _voiceBad = true; });
+    };
     _model = _store.model;
     if (_model != null) _models = [_model!];
     if ((_store.key ?? '').isNotEmpty) {
@@ -50,6 +67,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   void dispose() {
     _key.dispose();
     _nickname.dispose();
+    _voiceKey.dispose();
+    _tester.stop();
+    _tester.dispose();
     super.dispose();
   }
 
@@ -109,6 +129,134 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _noteBad = true;
       });
     }
+  }
+
+  /// Confere a chave da ElevenLabs e busca as vozes e os modelos da conta.
+  Future<void> _connectVoice() async {
+    final key = _voiceKey.text.trim();
+    FocusScope.of(context).unfocus();
+    if (key.isEmpty) {
+      await _store.saveVoiceKey(null);
+      setState(() {
+        _voiceNote = 'Chave removida. Ela fala com a voz do Android.';
+        _voiceBad = false;
+      });
+      return;
+    }
+    setState(() {
+      _voiceBusy = true;
+      _voiceNote = 'Conectando à ElevenLabs...';
+      _voiceBad = false;
+    });
+    try {
+      final voices = await Eleven.voices(key);
+      final models = await Eleven.models(key);
+      await _store.saveVoiceKey(key);
+      if (voices.isNotEmpty && !voices.any((voice) => voice.id == _store.voiceId)) {
+        _store.voiceId = voices.first.id;
+        _store.voiceName = voices.first.name;
+      }
+      if (models.isNotEmpty && !models.contains(_store.voiceModel)) {
+        _store.voiceModel = models.contains('eleven_v3') ? 'eleven_v3' : models.first;
+      }
+      if (!mounted) return;
+      setState(() {
+        _voices = voices;
+        _voiceModels = models;
+        _voiceBusy = false;
+        _voiceNote = voices.isEmpty ? 'A chave funciona, mas a conta não tem vozes.' : 'Conectada. Escolha a voz e toque em Testar.';
+        _voiceBad = voices.isEmpty;
+      });
+    } on VoiceException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _voiceBusy = false;
+        _voiceNote = error.message;
+        _voiceBad = true;
+      });
+    } catch (_) {
+      if (!mounted) return;
+      setState(() {
+        _voiceBusy = false;
+        _voiceNote = 'Não consegui conectar à ElevenLabs. Confira a internet e tente de novo.';
+        _voiceBad = true;
+      });
+    }
+  }
+
+  void _testVoice() {
+    _tester
+      ..eleven = _store.eleven
+      ..elevenKey = _store.voiceKey
+      ..voiceId = _store.voiceId
+      ..voiceModel = _store.voiceModel;
+    _tester.speak('Oi, choom. Essa é a minha voz. Preem, né?');
+  }
+
+  List<Widget> _elevenVoice() {
+    final voiceId = _store.voiceId;
+    final voiceModel = _store.voiceModel;
+    return [
+      const Text(
+        'Cole uma chave da ElevenLabs para ela falar com uma voz de lá. Cada resposta gasta créditos da sua conta, e o texto da resposta é enviado à ElevenLabs. Sem internet ou sem créditos, ela usa a voz do Android.',
+        style: TextStyle(color: Look.dim, fontSize: 13, height: 1.4),
+      ),
+      const SizedBox(height: 12),
+      TextField(
+        controller: _voiceKey,
+        obscureText: _voiceHidden,
+        autocorrect: false,
+        enableSuggestions: false,
+        style: const TextStyle(fontFamily: Look.mono, color: Look.ink),
+        decoration: InputDecoration(
+          labelText: 'Chave da ElevenLabs (sk_...)',
+          suffixIcon: IconButton(icon: Icon(_voiceHidden ? Icons.visibility_outlined : Icons.visibility_off_outlined, color: Look.dim), onPressed: () => setState(() => _voiceHidden = !_voiceHidden)),
+        ),
+      ),
+      const SizedBox(height: 10),
+      Row(
+        children: [
+          Expanded(child: OutlinedButton(onPressed: () => _open('https://elevenlabs.io/app/developers/api-keys'), child: const Text('Criar chave'))),
+          const SizedBox(width: 10),
+          Expanded(child: FilledButton(onPressed: _voiceBusy ? null : _connectVoice, child: Text(_voiceBusy ? 'Conectando...' : 'Conectar'))),
+        ],
+      ),
+      if (_voiceNote != null)
+        Padding(
+          padding: const EdgeInsets.only(top: 10),
+          child: Text(_voiceNote!, style: TextStyle(color: _voiceBad ? Look.yellow : Look.dim, fontSize: 13, height: 1.4)),
+        ),
+      if (_voices.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: _voices.any((voice) => voice.id == voiceId) ? voiceId : null,
+          isExpanded: true,
+          dropdownColor: Look.panel,
+          style: const TextStyle(fontFamily: Look.mono, color: Look.ink, fontSize: 14),
+          decoration: const InputDecoration(labelText: 'Voz'),
+          items: [for (final voice in _voices) DropdownMenuItem(value: voice.id, child: Text(voice.name, overflow: TextOverflow.ellipsis))],
+          onChanged: (value) {
+            setState(() {
+              _store.voiceId = value;
+              _store.voiceName = _voices.where((voice) => voice.id == value).map((voice) => voice.name).firstOrNull;
+            });
+          },
+        ),
+      ],
+      if (_voiceModels.isNotEmpty) ...[
+        const SizedBox(height: 12),
+        DropdownButtonFormField<String>(
+          value: _voiceModels.contains(voiceModel) ? voiceModel : null,
+          isExpanded: true,
+          dropdownColor: Look.panel,
+          style: const TextStyle(fontFamily: Look.mono, color: Look.ink, fontSize: 14),
+          decoration: const InputDecoration(labelText: 'Modelo de voz'),
+          items: [for (final id in _voiceModels) DropdownMenuItem(value: id, child: Text(id, overflow: TextOverflow.ellipsis))],
+          onChanged: (value) => setState(() => _store.voiceModel = value),
+        ),
+      ],
+      const SizedBox(height: 12),
+    ];
   }
 
   Future<void> _install() async {
@@ -278,9 +426,22 @@ class _SettingsScreenState extends State<SettingsScreen> {
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Ela fala as respostas'),
-            subtitle: const Text('Usa a voz em português do Android', style: TextStyle(color: Look.dim, fontSize: 12)),
             value: _store.voice,
             onChanged: (value) => setState(() => _store.voice = value),
+          ),
+          SegmentedButton<bool>(
+            segments: const [
+              ButtonSegment(value: false, label: Text('Voz do Android')),
+              ButtonSegment(value: true, label: Text('ElevenLabs')),
+            ],
+            selected: {_store.eleven},
+            onSelectionChanged: (picked) => setState(() => _store.eleven = picked.first),
+          ),
+          const SizedBox(height: 12),
+          if (_store.eleven) ..._elevenVoice(),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: OutlinedButton.icon(onPressed: _testVoice, icon: const Icon(Icons.volume_up_outlined, size: 18), label: const Text('Testar a voz')),
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,

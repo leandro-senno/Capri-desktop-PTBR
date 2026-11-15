@@ -6,6 +6,7 @@ import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
 import 'brain.dart';
 import 'look.dart';
+import 'overlay.dart';
 import 'settings_screen.dart';
 import 'sprite.dart';
 import 'store.dart';
@@ -57,6 +58,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _speaking = false;
       _capri.talking = false;
       if (mounted) setState(() {});
+    };
+    _voice.onShapes = _capri.lipSync;
+    _voice.onProblem = (problem) {
+      if (mounted) _notice(problem);
     };
     _capri.addListener(_moodChanged);
     _wander = Timer.periodic(const Duration(seconds: 9), (_) => _roam());
@@ -126,6 +131,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _brain.localReady = _store.localReady;
     _brain.gpu = _store.localGpu;
     _brain.gpuGuard = _store.setGpuTrying;
+    _voice.eleven = _store.eleven;
+    _voice.elevenKey = _store.voiceKey;
+    _voice.voiceId = _store.voiceId;
+    _voice.voiceModel = _store.voiceModel;
     _capri.sleepAfter = _store.sleepMinutes * 60.0;
   }
 
@@ -261,17 +270,20 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
           return;
         }
       }
+      if (!mounted) return;
+      final screen = MediaQuery.of(context).size;
       await FlutterOverlayWindow.showOverlay(
-        height: 300,
-        width: 190,
-        alignment: OverlayAlignment.centerRight,
+        height: FloatingCapri.tall.round(),
+        width: FloatingCapri.wide.round(),
+        alignment: OverlayAlignment.topLeft,
+        startPosition: OverlayPosition(screen.width - FloatingCapri.wide - 8, screen.height * 0.4),
         enableDrag: true,
         positionGravity: PositionGravity.none,
         flag: OverlayFlag.defaultFlag,
         overlayTitle: 'Capri',
-        overlayContent: 'Capri está flutuando. Toque duas vezes nela para guardar.',
+        overlayContent: 'Capri está flutuando. Para guardar, abra o app e toque no botão de janela.',
       );
-      if (mounted) _notice('Ela está flutuando. Arraste para mover; toque duas vezes para guardar.');
+      if (mounted) _notice('Ela está flutuando. Dois toques: senta ou levanta. Segure e arraste para mover. Toque neste botão de novo para guardar.');
     } catch (_) {
       if (mounted) _notice('Não consegui abrir a janela flutuante neste aparelho.');
     }

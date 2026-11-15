@@ -24,15 +24,44 @@ class Store {
   late final SharedPreferences _prefs;
 
   String? key;
+  String? voiceKey;
 
   Future<void> load() async {
     _prefs = await SharedPreferences.getInstance();
     try {
       key = await _vault.read(key: 'brain_key');
+      voiceKey = await _vault.read(key: 'voice_key');
     } catch (_) {
       key = null; // cofre ilegível (por exemplo, depois de restaurar um backup): pede a chave de novo
+      voiceKey = null;
     }
   }
+
+  Future<void> saveVoiceKey(String? value) async {
+    voiceKey = value;
+    try {
+      if (value == null || value.isEmpty) {
+        await _vault.delete(key: 'voice_key');
+      } else {
+        await _vault.write(key: 'voice_key', value: value);
+      }
+    } catch (_) {
+      // sem cofre, a chave vale só até fechar o app
+    }
+  }
+
+  /// Falar pela ElevenLabs (true) ou pela voz do Android (false).
+  bool get eleven => _prefs.getBool('eleven') ?? false;
+  set eleven(bool value) => _prefs.setBool('eleven', value);
+
+  String? get voiceId => _prefs.getString('voice_id');
+  set voiceId(String? value) => value == null || value.isEmpty ? _prefs.remove('voice_id') : _prefs.setString('voice_id', value);
+
+  String? get voiceName => _prefs.getString('voice_name');
+  set voiceName(String? value) => value == null || value.isEmpty ? _prefs.remove('voice_name') : _prefs.setString('voice_name', value);
+
+  String? get voiceModel => _prefs.getString('voice_model');
+  set voiceModel(String? value) => value == null || value.isEmpty ? _prefs.remove('voice_model') : _prefs.setString('voice_model', value);
 
   Future<void> saveKey(String? value) async {
     key = value;
