@@ -33,6 +33,12 @@ jobs:
           flutter create --platforms=android --org com.leandrosenno --project-name capri .
           rm -rf test
           git checkout -- .
+      # Guarda a chave de assinatura entre as compilações, para o APK novo instalar por cima do antigo
+      # sem apagar os dados (o cérebro baixado). Se o cache expirar, a chave muda e é preciso reinstalar.
+      - uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: capri-assinatura-v1
       - run: flutter pub get
       - run: flutter analyze --no-fatal-infos --no-fatal-warnings
       # O motor do cérebro local (LiteRT-LM) só existe para arm64, que é o caso do S25 FE.
