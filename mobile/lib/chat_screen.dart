@@ -1,3 +1,6 @@
+import 'dart:async';
+import 'dart:math';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
@@ -28,6 +31,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _speaking = false;
   int _ticket = 0;
 
+  // Onde ela está no palco: 0 = esquerda, 1 = direita.
+  double _x = 0.5;
+  double _stageWide = 360;
+  Duration _glide = Duration.zero;
+  Timer? _wander;
+  Timer? _arrival;
+  final Random _random = Random();
+
   Store get _store => widget.store;
 
   @override
@@ -48,7 +59,58 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (mounted) setState(() {});
     };
     _capri.addListener(_moodChanged);
-    WidgetsBinding.instance.addPostFrameCallback((_) => _greet());
+    _wander = Timer.periodic(const Duration(seconds: 9), (_) => _roam());
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _greet();
+      if (_store.gpuTrying) {
+        // O app fechou enquanto carregava o cérebro na placa de vídeo: da próxima vez usa o processador.
+        _store.localGpu = false;
+        _store.setGpuTrying(false);
+        _brain.gpu = false;
+        _notice('A placa de vídeo travou da última vez. Troquei o cérebro para o processador.');
+      }
+    });
+  }
+
+  /// De vez em quando ela anda, senta ou levanta sozinha, como no PC.
+  void _roam() {
+    if (!mounted || !_store.wander || !_capri.calm || _capri.sleeping || _listening || _thinking || _speaking) return;
+    if (MediaQuery.of(context).viewInsets.bottom > 0) return;
+    final dice = _random.nextInt(100);
+    if (_capri.seated) {
+      if (dice < 25) _capri.stand();
+      return;
+    }
+    if (dice < 40) {
+      _walkTo(0.06 + _random.nextDouble() * 0.88);
+    } else if (dice < 55) {
+      _capri.sit();
+    }
+  }
+
+  void _walkTo(double target) {
+    final distance = (target - _x).abs() * _stageWide;
+    if (distance < 24) return;
+    final time = Duration(milliseconds: (distance / 90 * 1000).round());
+    _capri.facingLeft = target < _x;
+    _capri.walking = true;
+    if (!_capri.walking) return;
+    setState(() {
+      _glide = time;
+      _x = target;
+    });
+    _arrival?.cancel();
+    _arrival = Timer(time, () {
+      if (!mounted) return;
+      _capri.walking = false;
+      setState(() => _glide = Duration.zero);
+    });
+  }
+
+  void _stopWalk() {
+    _arrival?.cancel();
+    _capri.walking = false;
+    _glide = Duration.zero;
   }
 
   void _moodChanged() {
@@ -60,6 +122,10 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _brain.model = _store.model;
     _brain.nickname = _store.nickname;
     _brain.wordiness = _store.wordiness;
+    _brain.local = _store.local;
+    _brain.localReady = _store.localReady;
+    _brain.gpu = _store.localGpu;
+    _brain.gpuGuard = _store.setGpuTrying;
     _capri.sleepAfter = _store.sleepMinutes * 60.0;
   }
 
@@ -89,8 +155,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   @override
   void dispose() {
     WidgetsBinding.instance.removeObserver(this);
+    _wander?.cancel();
+    _arrival?.cancel();
     _capri.removeListener(_moodChanged);
     _brain.cancel();
+    _brain.device.unload();
     _voice.dispose();
     _capri.dispose();
     _input.dispose();
@@ -112,6 +181,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _input.clear();
     _capri.poke();
     await _voice.stop();
+    _applySettings();
     _add(Line(true, said));
 
     if (!_brain.ready) {
@@ -208,7 +278,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _openSettings() async {
-    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SettingsScreen(store: _store)));
+    await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SettingsScreen(store: _store, brain: _brain)));
     if (!mounted) return;
     setState(_applySettings);
   }
@@ -222,7 +292,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   String get _status {
     if (!_brain.ready) return 'DORMENTE';
     if (_listening) return 'OUVINDO';
-    if (_thinking) return 'PENSANDO';
+    if (_thinking) return _brain.local && _brain.device.onGpu == null ? 'ACORDANDO O CÉREBRO' : 'PENSANDO';
     if (_speaking) return 'FALANDO';
     if (_capri.sleeping) return 'DORMINDO';
     return 'ONLINE';
@@ -234,6 +304,77 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     if (_thinking) return Look.yellow;
     if (_speaking) return Look.neon;
     return Look.cyan;
+  }
+
+  /// O palco: ela fica em pé na beirada da faixa de status ou senta nela, com as pernas penduradas.
+  Widget _stage(double tall) {
+    return LayoutBuilder(
+      builder: (context, box) {
+        final wide = box.maxWidth;
+        _stageWide = wide;
+        final perch = _capri.reel.perch;
+        final high = perch ? tall * 0.84 : tall * 0.96;
+        final across = high * _capri.reel.aspect;
+        final strip = tall * 0.84 * 0.21; // quanto dela passa da beirada quando senta (SitY = 0.79 no original)
+        final margin = tall * 0.96 * 0.625 / 2;
+        final centre = margin + _x * (wide - 2 * margin);
+        final left = (centre - across * (perch ? 0.45 : 0.5)).clamp(-across * 0.3, wide - across * 0.7).toDouble();
+        final bottom = (perch ? strip - high * 0.21 : strip) + (_capri.dragging ? 14 : 0);
+        return SizedBox(
+          height: tall + strip,
+          child: Stack(
+            clipBehavior: Clip.none,
+            children: [
+              Positioned(
+                left: 0,
+                right: 0,
+                bottom: 0,
+                height: strip,
+                child: Container(
+                  decoration: const BoxDecoration(color: Look.panel, border: Border(top: BorderSide(color: Look.edge))),
+                  alignment: _x > 0.5 ? Alignment.centerLeft : Alignment.centerRight,
+                  padding: const EdgeInsets.symmetric(horizontal: 14),
+                  child: Text('• $_status', style: TextStyle(color: _statusColor, fontSize: 13, letterSpacing: 3)),
+                ),
+              ),
+              AnimatedPositioned(
+                duration: _glide,
+                left: left,
+                bottom: bottom,
+                child: GestureDetector(
+                  behavior: HitTestBehavior.translucent,
+                  onTap: () {
+                    if (_capri.sleeping) {
+                      _capri.poke();
+                    } else {
+                      _capri.grin();
+                    }
+                  },
+                  onDoubleTap: () {
+                    _stopWalk();
+                    _capri.toggleSeat();
+                  },
+                  onLongPress: _capri.dance,
+                  onPanStart: (_) {
+                    _stopWalk();
+                    _capri.poke();
+                    _capri.dragging = true;
+                  },
+                  onPanUpdate: (details) {
+                    final room = wide - 2 * margin;
+                    if (room <= 0) return;
+                    setState(() => _x = (_x + details.delta.dx / room).clamp(0.0, 1.0).toDouble());
+                  },
+                  onPanEnd: (_) => _capri.dragging = false,
+                  onPanCancel: () => _capri.dragging = false,
+                  child: CapriView(controller: _capri, height: high),
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   @override
@@ -252,28 +393,16 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       body: SafeArea(
         child: Column(
           children: [
-            GestureDetector(
-              onTap: () {
-                if (_capri.sleeping) {
-                  _capri.poke();
-                } else {
-                  _capri.grin();
-                }
-              },
-              onDoubleTap: _capri.dance,
-              child: CapriView(controller: _capri, height: keyboard ? tall * 0.16 : tall * 0.32),
-            ),
-            Padding(
-              padding: const EdgeInsets.symmetric(vertical: 6),
-              child: Text('• $_status', style: TextStyle(color: _statusColor, fontSize: 13, letterSpacing: 3)),
-            ),
+            _stage(keyboard ? tall * 0.15 : tall * 0.30),
             Expanded(
               child: _lines.isEmpty
                   ? Center(
                       child: Padding(
                         padding: const EdgeInsets.all(24),
                         child: Text(
-                          _brain.ready ? 'Fala comigo, choom.' : 'Ela ainda está sem cérebro.\nToque no chip lá em cima e conecte uma chave grátis da NVIDIA.',
+                          _brain.ready
+                              ? 'Fala comigo, choom.\n\nToque duas vezes nela para sentar ou levantar, segure para dançar e arraste para mover.'
+                              : 'Ela ainda está sem cérebro.\nToque no chip lá em cima e monte o cérebro no celular.',
                           textAlign: TextAlign.center,
                           style: const TextStyle(color: Look.dim, fontSize: 15, height: 1.5),
                         ),

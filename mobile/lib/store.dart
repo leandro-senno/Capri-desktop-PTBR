@@ -63,6 +63,26 @@ class Store {
   bool get intro => _prefs.getBool('intro') ?? true;
   set intro(bool value) => _prefs.setBool('intro', value);
 
+  /// Cérebro no celular (true) ou por chave (false). Quem já tinha uma chave continua nela.
+  bool get local => _prefs.getBool('local') ?? (key == null || key!.isEmpty);
+  set local(bool value) => _prefs.setBool('local', value);
+
+  /// O modelo local já foi baixado.
+  bool get localReady => _prefs.getBool('local_ready') ?? false;
+  set localReady(bool value) => _prefs.setBool('local_ready', value);
+
+  /// Usar a placa de vídeo do celular para o cérebro local.
+  bool get localGpu => _prefs.getBool('local_gpu') ?? true;
+  set localGpu(bool value) => _prefs.setBool('local_gpu', value);
+
+  /// Ficou true se o app fechou no meio de carregar o modelo na placa de vídeo.
+  bool get gpuTrying => _prefs.getBool('gpu_trying') ?? false;
+  Future<void> setGpuTrying(bool value) => _prefs.setBool('gpu_trying', value);
+
+  /// Ela passeia e senta sozinha.
+  bool get wander => _prefs.getBool('wander') ?? true;
+  set wander(bool value) => _prefs.setBool('wander', value);
+
   /// Minutos parada até dormir (0 = nunca).
   int get sleepMinutes => _prefs.getInt('sleep_minutes') ?? 3;
   set sleepMinutes(int value) => _prefs.setInt('sleep_minutes', value);

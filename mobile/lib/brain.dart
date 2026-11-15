@@ -3,6 +3,7 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'local_brain.dart';
 import 'persona.dart';
 
 /// Erro que já vem numa frase pronta para mostrar na conversa.
@@ -29,7 +30,7 @@ class Brain {
   ];
 
   static const String offline =
-      'Meu cérebro está offline. Abra as configurações, toque em "Chave grátis" e cole uma chave grátis da NVIDIA.';
+      'Meu cérebro está offline. Toque no chip lá em cima e monte o cérebro no celular, ou conecte uma chave grátis da NVIDIA.';
   static const String declined = '[SIGNAL CORRUPTED] Perdi essa na estática. Me pergunta outra coisa?';
 
   String? key;
@@ -39,6 +40,21 @@ class Brain {
 
   /// Quantas trocas ela lembra (no original: Recall = 8).
   int recall = 8;
+
+  /// true = o cérebro roda no próprio celular; false = cérebro por chave.
+  bool local = true;
+
+  /// O modelo local já foi baixado.
+  bool localReady = false;
+
+  /// Tentar a placa de vídeo do celular (mais rápido) antes do processador.
+  bool gpu = true;
+
+  /// Avisado antes (true) e depois (false) de carregar o modelo na placa de vídeo, para o app
+  /// lembrar da tentativa se o aparelho travar no meio.
+  Future<void> Function(bool trying)? gpuGuard;
+
+  final LocalBrain device = LocalBrain();
 
   final List<Map<String, String>> _history = [];
   http.Client? _active;
@@ -52,7 +68,7 @@ class Brain {
   }
 
   String? get kind => kindOf(key);
-  bool get ready => kind != null && (model ?? '').isNotEmpty;
+  bool get ready => local ? localReady : kind != null && (model ?? '').isNotEmpty;
 
   static String companyOf(String? kind) {
     switch (kind) {
@@ -185,7 +201,37 @@ class Brain {
   }
 
   /// Manda a fala da pessoa e devolve a resposta da Capri.
-  Future<String> ask(String said) async {
+  Future<String> ask(String said) => local ? _askLocal(said) : _askCloud(said);
+
+  Future<String> _askLocal(String said) async {
+    if (!localReady) throw BrainException(offline);
+    // As últimas trocas, para a sessão do modelo recomeçar sem perder o fio.
+    final recent = _history.length > 6 ? _history.sublist(_history.length - 6) : _history;
+    final recap = recent.map((turn) => '${turn['role'] == 'user' ? 'User' : 'Capri'}: ${turn['content']}').join('\n');
+    final limit = [160, 300, 600][wordiness.clamp(0, 2).toInt()];
+    final guarded = gpu && device.onGpu == null;
+    String reply;
+    try {
+      if (guarded) await gpuGuard?.call(true);
+      reply = await device.ask(system: character(nickname: nickname, wordiness: wordiness), said: said, limit: limit, gpu: gpu, recap: recap);
+    } on TimeoutException {
+      throw BrainException('Demorei demais pensando. Tente de novo, ou use uma chave nas configurações.');
+    } catch (error) {
+      if (error is BrainException) rethrow;
+      await device.unload();
+      throw BrainException('Meu cérebro local falhou ao carregar. Feche outros apps e tente de novo, ou troque para o processador nas configurações.');
+    } finally {
+      if (guarded) await gpuGuard?.call(false);
+    }
+    reply = _clean(reply);
+    if (reply.isEmpty) return declined;
+    _history.add({'role': 'user', 'content': said});
+    _history.add({'role': 'assistant', 'content': reply});
+    _trim();
+    return reply;
+  }
+
+  Future<String> _askCloud(String said) async {
     final kind = this.kind;
     final key = this.key;
     final model = this.model;
