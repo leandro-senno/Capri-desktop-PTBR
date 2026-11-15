@@ -208,10 +208,26 @@ class Brain {
   static const String nudge =
       "(They've been quiet for a while. Say one short line to pull them back into chatting: tease them, ask about their day or what they're doing. Don't mention this note.)";
 
+  /// O que a pessoa pediu para ela lembrar. Vai no prompt de sistema.
+  List<String> facts = const [];
+
+  /// O momento (dia, hora, bateria, clima). Vai junto da fala, para não mudar o prompt de sistema a cada minuto.
+  String? moment;
+
   String _system(String? note) {
-    final base = character(nickname: nickname, wordiness: wordiness);
-    return note == null ? base : '$base\n$note';
+    final buffer = StringBuffer(character(nickname: nickname, wordiness: wordiness))
+      ..write('\nA line in [Right now: ...] before their message is background about this moment. Use it only when it matters and never read it out.');
+    if (facts.isNotEmpty) {
+      buffer.write('\nThings they asked you to remember about them (your long-term memory):');
+      for (final fact in facts) {
+        buffer.write('\n- $fact');
+      }
+    }
+    if (note != null) buffer.write('\n$note');
+    return buffer.toString();
   }
+
+  String _stamp(String said) => (moment ?? '').isEmpty ? said : '[Right now: $moment]\n$said';
 
   Future<String> _askLocal(String said, String? note) async {
     if (!localReady) throw BrainException(offline);
@@ -223,7 +239,7 @@ class Brain {
     String reply;
     try {
       if (guarded) await gpuGuard?.call(true);
-      reply = await device.ask(system: _system(note), said: said, limit: limit, gpu: gpu, recap: recap);
+      reply = await device.ask(system: _system(note), said: _stamp(said), limit: limit, gpu: gpu, recap: recap);
     } on TimeoutException {
       throw BrainException('Demorei demais pensando. Tente de novo, ou use uma chave nas configurações.');
     } catch (error) {
@@ -249,6 +265,11 @@ class Brain {
 
     _history.add({'role': 'user', 'content': said});
     _trim();
+    // Só a fala atual leva o carimbo do momento; o histórico guarda a fala limpa.
+    final turns = [
+      ..._history.sublist(0, _history.length - 1),
+      {'role': 'user', 'content': _stamp(said)},
+    ];
     final system = _system(note);
     final limit = [512, 800, 1400][wordiness.clamp(0, 2).toInt()];
 
@@ -256,14 +277,14 @@ class Brain {
     final Map<String, Object?> body;
     if (kind == 'anthropic') {
       address = Uri.parse('$anthropic/v1/messages');
-      body = {'model': model, 'max_tokens': limit, 'system': system, 'messages': _history};
+      body = {'model': model, 'max_tokens': limit, 'system': system, 'messages': turns};
     } else {
       address = Uri.parse('${_base(kind)}/v1/chat/completions');
       body = {
         'model': model,
         'messages': [
           {'role': 'system', 'content': system},
-          ..._history,
+          ...turns,
         ],
         'stream': false,
       };

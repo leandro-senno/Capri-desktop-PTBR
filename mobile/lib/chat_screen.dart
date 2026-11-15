@@ -3,6 +3,7 @@ import 'dart:isolate';
 import 'dart:math';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 
 import 'brain.dart';
@@ -45,6 +46,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   // Puxar conversa e falar com a janela flutuante.
   Timer? _nudges;
   ReceivePort? _port;
+  StreamSubscription<dynamic>? _notices;
+  DateTime? _lastNotice;
   DateTime _lastActivity = DateTime.now();
   bool _foreground = true;
   static const List<String> _nudgeLines = [
@@ -86,6 +89,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       if (message['type'] == 'ask' && text is String) _send(text);
     });
     _nudges = Timer.periodic(const Duration(minutes: 1), (_) => _maybeNudge());
+    // Notificações que chegam (só com o acesso ligado e o aviso ativado nas configurações).
+    _notices = const EventChannel('capri/notices').receiveBroadcastStream().listen(_noticed, onError: (_) {});
     _voice.onProblem = (problem) {
       if (mounted) _notice(problem);
     };
@@ -157,6 +162,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _brain.localReady = _store.localReady;
     _brain.gpu = _store.localGpu;
     _brain.gpuGuard = _store.setGpuTrying;
+    _brain.facts = _store.facts;
+    Hands.store = _store;
     _voice.eleven = _store.eleven;
     _voice.elevenKey = _store.voiceKey;
     _voice.voiceId = _store.voiceId;
@@ -197,6 +204,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _wander?.cancel();
     _arrival?.cancel();
     _nudges?.cancel();
+    _notices?.cancel();
     Link.close(Link.app, _port);
     _capri.removeListener(_moodChanged);
     _brain.cancel();
@@ -214,6 +222,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (_scroll.hasClients) _scroll.animateTo(_scroll.position.maxScrollExtent, duration: const Duration(milliseconds: 200), curve: Curves.easeOut);
     });
+  }
+
+  /// Chegou uma notificação: se for mensagem e o aviso estiver ligado, ela conta de quem é.
+  /// O texto da mensagem não é lido em voz alta nem enviado ao cérebro; para isso a pessoa pede.
+  void _noticed(dynamic item) {
+    if (!mounted || !_store.announce || item is! Map || item['message'] != true) return;
+    if (_thinking || _speaking || _listening) return;
+    final now = DateTime.now();
+    final last = _lastNotice;
+    if (last != null && now.difference(last).inSeconds < 20) return;
+    _lastNotice = now;
+    final title = (item['title'] as String?) ?? '';
+    final app = (item['app'] as String?) ?? '';
+    _capri.poke();
+    _say(Line(false, title.isEmpty ? 'Chegou mensagem no $app.' : 'Chegou mensagem de $title no $app.'));
   }
 
   void _busy(bool value) {
@@ -249,6 +272,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       // Primeiro as mãos: abrir app ou link, tocar música, pesquisar. Depois ela comenta o que fez.
       final deed = await Hands.handle(said);
+      _brain.facts = _store.facts; // ela pode ter acabado de anotar ou esquecer algo
+      _brain.moment = await Hands.moment();
       String reply;
       var problem = false;
       if (deed != null) {
@@ -299,6 +324,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final ticket = ++_ticket;
       _busy(true);
       try {
+        _brain.moment = await Hands.moment();
         line = await _brain.ask(Brain.nudge);
       } catch (_) {
         // sem cérebro agora: usa uma das falas prontas

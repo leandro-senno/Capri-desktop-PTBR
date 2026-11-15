@@ -8,6 +8,10 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Criar alarmes e timers no relógio do Android -->
+    <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
+    <!-- Achar o número de um contato pelo nome, para ligar ou mandar mensagem -->
+    <uses-permission android:name="android.permission.READ_CONTACTS"/>
 
     <application
         android:label="Capri"
@@ -39,6 +43,31 @@
             <property
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="Mostra a personagem Capri flutuando sobre outros apps, a pedido da pessoa."/>
+        </service>
+
+        <!-- Ler o texto da tela e tocar, rolar e digitar em outros apps, a pedido da pessoa -->
+        <service
+            android:name=".CapriAccess"
+            android:exported="true"
+            android:label="Capri"
+            android:permission="android.permission.BIND_ACCESSIBILITY_SERVICE">
+            <intent-filter>
+                <action android:name="android.accessibilityservice.AccessibilityService"/>
+            </intent-filter>
+            <meta-data
+                android:name="android.accessibilityservice"
+                android:resource="@xml/capri_access"/>
+        </service>
+
+        <!-- Ler as notificações quando a pessoa pede -->
+        <service
+            android:name=".CapriNotices"
+            android:exported="true"
+            android:label="Capri"
+            android:permission="android.permission.BIND_NOTIFICATION_LISTENER_SERVICE">
+            <intent-filter>
+                <action android:name="android.service.notification.NotificationListenerService"/>
+            </intent-filter>
         </service>
 
         <meta-data

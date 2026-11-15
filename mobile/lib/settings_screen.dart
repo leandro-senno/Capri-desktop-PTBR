@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'brain.dart';
+import 'hands.dart';
 import 'local_brain.dart';
 import 'look.dart';
 import 'store.dart';
@@ -17,7 +18,7 @@ class SettingsScreen extends StatefulWidget {
   State<SettingsScreen> createState() => _SettingsScreenState();
 }
 
-class _SettingsScreenState extends State<SettingsScreen> {
+class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObserver {
   static const String freeKeyPage = 'https://build.nvidia.com/settings/api-keys';
 
   late final TextEditingController _key;
@@ -29,6 +30,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
   bool _busy = false;
   bool _hidden = true;
   late final TextEditingController _voiceKey;
+  late final TextEditingController _city;
+  bool _accessOn = false;
+  bool _noticesOn = false;
   final Voice _tester = Voice();
   List<VoiceEntry> _voices = [];
   List<String> _voiceModels = [];
@@ -49,6 +53,9 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _key = TextEditingController(text: _store.key ?? '');
     _nickname = TextEditingController(text: _store.nickname ?? '');
     _voiceKey = TextEditingController(text: _store.voiceKey ?? '');
+    _city = TextEditingController(text: _store.city ?? '');
+    WidgetsBinding.instance.addObserver(this);
+    _checkAccess();
     final voiceId = _store.voiceId;
     if (voiceId != null) _voices = [VoiceEntry(voiceId, _store.voiceName ?? voiceId)];
     final voiceModel = _store.voiceModel;
@@ -68,6 +75,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
     _key.dispose();
     _nickname.dispose();
     _voiceKey.dispose();
+    _city.dispose();
+    WidgetsBinding.instance.removeObserver(this);
     _tester.stop();
     _tester.dispose();
     super.dispose();
@@ -129,6 +138,100 @@ class _SettingsScreenState extends State<SettingsScreen> {
         _noteBad = true;
       });
     }
+  }
+
+  /// Volta das configurações do Android: confere de novo se as permissões foram dadas.
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) _checkAccess();
+  }
+
+  Future<void> _checkAccess() async {
+    final access = await Hands.accessOn();
+    final notices = await Hands.noticesOn();
+    if (!mounted) return;
+    setState(() {
+      _accessOn = access;
+      _noticesOn = notices;
+    });
+  }
+
+  Widget _permission(String name, bool on, String about, VoidCallback open) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Expanded(child: Text(name, style: const TextStyle(fontSize: 15))),
+              Text(on ? '• LIGADO' : '• DESLIGADO', style: TextStyle(color: on ? Look.cyan : Look.dim, fontSize: 12, letterSpacing: 2)),
+            ],
+          ),
+          const SizedBox(height: 4),
+          Text(about, style: const TextStyle(color: Look.dim, fontSize: 12, height: 1.4)),
+          const SizedBox(height: 6),
+          OutlinedButton(onPressed: open, child: Text(on ? 'Abrir a permissão' : 'Ativar')),
+        ],
+      ),
+    );
+  }
+
+  List<Widget> _eyesAndHands() {
+    final facts = _store.facts;
+    return [
+      _permission(
+        'Ver e controlar a tela',
+        _accessOn,
+        'Ela lê o texto da tela de outros apps ("o que tem na tela?", "resume isso") e toca, rola, digita e volta quando você pede ("clica em Entrar", "rola pra baixo", "digita oi", "volta"). Antes de tocar em comprar, pagar, enviar ou apagar, ela pergunta. Com cérebro por chave, o texto lido vai para o provedor da chave.',
+        Hands.openAccessSettings,
+      ),
+      _permission(
+        'Ler notificações',
+        _noticesOn,
+        'Ela guarda as últimas notificações na memória do aparelho e conta o que chegou quando você pergunta ("o que chegou?").',
+        Hands.openNoticeSettings,
+      ),
+      const Text(
+        'Se o Android disser "configuração restrita" ao ativar: toque em "Liberar configurações restritas", abra o menu de três pontos no canto da tela do app, escolha "Permitir configurações restritas" e ative de novo.',
+        style: TextStyle(color: Look.dim, fontSize: 12, height: 1.4),
+      ),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: TextButton(onPressed: Hands.openAppSettings, child: const Text('Liberar configurações restritas')),
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Avisar quando chegar mensagem'),
+        subtitle: const Text('Ela diz de quem é, sem ler o conteúdo', style: TextStyle(color: Look.dim, fontSize: 12)),
+        value: _store.announce,
+        onChanged: (value) => setState(() => _store.announce = value),
+      ),
+      const SizedBox(height: 8),
+      TextField(
+        controller: _city,
+        maxLength: 40,
+        onChanged: (value) => _store.city = value,
+        style: const TextStyle(fontFamily: Look.mono, color: Look.ink),
+        decoration: const InputDecoration(labelText: 'Sua cidade, para ela saber o clima (opcional)', counterText: ''),
+      ),
+      const SizedBox(height: 14),
+      Text(
+        facts.isEmpty ? 'Memória: vazia. Diga "lembra que..." na conversa para ela guardar algo.' : 'Memória: o que você pediu para ela lembrar',
+        style: const TextStyle(color: Look.dim, fontSize: 13, height: 1.4),
+      ),
+      for (final fact in facts)
+        Row(
+          children: [
+            Expanded(child: Text('- $fact', style: const TextStyle(fontSize: 13, height: 1.4))),
+            IconButton(
+              tooltip: 'Esquecer',
+              icon: const Icon(Icons.close, size: 18, color: Look.dim),
+              onPressed: () => setState(() => _store.facts = _store.facts..remove(fact)),
+            ),
+          ],
+        ),
+    ];
   }
 
   /// Confere a chave da ElevenLabs e busca as vozes e os modelos da conta.
@@ -450,6 +553,8 @@ class _SettingsScreenState extends State<SettingsScreen> {
             value: _store.intro,
             onChanged: (value) => setState(() => _store.intro = value),
           ),
+          _title('OLHOS E MÃOS'),
+          ..._eyesAndHands(),
           _title('JEITO DELA'),
           TextField(
             controller: _nickname,

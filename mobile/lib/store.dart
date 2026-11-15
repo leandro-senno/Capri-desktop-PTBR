@@ -112,6 +112,24 @@ class Store {
   int get nudgeMinutes => _prefs.getInt('nudge_minutes') ?? 30;
   set nudgeMinutes(int value) => _prefs.setInt('nudge_minutes', value);
 
+  /// O que a pessoa pediu para ela lembrar (memória de longo prazo).
+  List<String> get facts => _prefs.getStringList('facts') ?? [];
+  set facts(List<String> value) => _prefs.setStringList('facts', value);
+
+  void addFact(String fact) {
+    final all = facts..remove(fact);
+    all.add(fact);
+    facts = all.length > 40 ? all.sublist(all.length - 40) : all;
+  }
+
+  /// A cidade da pessoa, para ela saber o clima.
+  String? get city => _prefs.getString('city');
+  set city(String? value) => value == null || value.trim().isEmpty ? _prefs.remove('city') : _prefs.setString('city', value.trim());
+
+  /// Avisar na conversa quando chega uma mensagem (precisa do acesso às notificações).
+  bool get announce => _prefs.getBool('announce') ?? false;
+  set announce(bool value) => _prefs.setBool('announce', value);
+
   /// Ela passeia e senta sozinha.
   bool get wander => _prefs.getBool('wander') ?? true;
   set wander(bool value) => _prefs.setBool('wander', value);
