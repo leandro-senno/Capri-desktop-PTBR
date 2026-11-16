@@ -17,11 +17,7 @@ class LocalBrain {
   static bool _activated = false;
 
   dynamic _model;
-  dynamic _chat;
   bool? _loadedGpu;
-  String? _system;
-  int _limit = 0;
-  int _turns = 0;
 
   /// Em qual processador o modelo foi carregado (null = ainda não carregou).
   bool? get onGpu => _loadedGpu;
@@ -54,10 +50,7 @@ class LocalBrain {
   Future<void> unload() async {
     final model = _model;
     _model = null;
-    _chat = null;
     _loadedGpu = null;
-    _system = null;
-    _turns = 0;
     try {
       await model?.close();
     } catch (_) {}
@@ -88,26 +81,25 @@ class LocalBrain {
     _loadedGpu = false;
   }
 
-  /// Responde à fala. [recap] são as últimas trocas, usadas quando a sessão precisa recomeçar.
-  Future<String> ask({required String system, required String said, required int limit, required bool gpu, String recap = ''}) async {
+  /// Responde a uma fala. Cada chamada é uma sessão nova: quem chama manda no [system] tudo que o modelo
+  /// precisa saber, inclusive a conversa recente. Assim a memória não depende do estado interno do motor.
+  Future<String> ask({required String system, required String said, required int limit, required bool gpu}) async {
     await load(gpu: gpu);
-    // A janela do modelo é curta: a cada 8 trocas a sessão recomeça, levando um resumo das últimas falas.
-    if (_chat == null || _system != system || _limit != limit || _turns >= 8) {
-      _chat = await _model.createChat(
-        systemInstruction: recap.isEmpty ? system : '$system\n\nThe conversation so far:\n$recap',
-        maxOutputTokens: limit,
-      );
-      _system = system;
-      _limit = limit;
-      _turns = 0;
+    final chat = await _model.createChat(systemInstruction: system, maxOutputTokens: limit);
+    try {
+      await chat.addQueryChunk(Message.text(text: said, isUser: true));
+      final reply = StringBuffer();
+      final Stream<dynamic> stream = chat.generateChatResponseAsync();
+      await for (final event in stream.timeout(const Duration(seconds: 120))) {
+        if (event is TextResponse) reply.write(event.token);
+      }
+      return reply.toString();
+    } finally {
+      try {
+        await chat.close();
+      } catch (_) {
+        // versões do motor sem close(): a sessão é descartada na próxima
+      }
     }
-    _turns++;
-    await _chat.addQueryChunk(Message.text(text: said, isUser: true));
-    final reply = StringBuffer();
-    final Stream<dynamic> stream = _chat.generateChatResponseAsync();
-    await for (final event in stream.timeout(const Duration(seconds: 120))) {
-      if (event is TextResponse) reply.write(event.token);
-    }
-    return reply.toString();
   }
 }

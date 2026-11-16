@@ -130,6 +130,10 @@ class Store {
   bool get announce => _prefs.getBool('announce') ?? false;
   set announce(bool value) => _prefs.setBool('announce', value);
 
+  /// Conversa contínua: depois de responder, o microfone abre de novo sozinho.
+  bool get continuous => _prefs.getBool('continuous') ?? false;
+  set continuous(bool value) => _prefs.setBool('continuous', value);
+
   /// Ela passeia e senta sozinha.
   bool get wander => _prefs.getBool('wander') ?? true;
   set wander(bool value) => _prefs.setBool('wander', value);

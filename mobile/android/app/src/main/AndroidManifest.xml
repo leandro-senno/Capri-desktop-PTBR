@@ -8,6 +8,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE"/>
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE"/>
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
+    <!-- Ouvir pelo microfone com ela flutuando sobre outros apps -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
     <!-- Criar alarmes e timers no relógio do Android -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
     <!-- Achar o número de um contato pelo nome, para ligar ou mandar mensagem -->
@@ -58,6 +60,12 @@
                 android:name="android.accessibilityservice"
                 android:resource="@xml/capri_access"/>
         </service>
+
+        <!-- Mantém o microfone disponível enquanto ela flutua (não grava nada sozinho) -->
+        <service
+            android:name=".CapriEar"
+            android:exported="false"
+            android:foregroundServiceType="microphone"/>
 
         <!-- Ler as notificações quando a pessoa pede -->
         <service

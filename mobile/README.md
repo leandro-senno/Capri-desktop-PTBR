@@ -15,7 +15,8 @@ Versão de bolso da Capri, refeita em Flutter a partir do app de Windows deste r
 - **Ver e controlar a tela** (com a permissão de acessibilidade): "o que tem na tela?", "resume isso", "clica em Entrar", "rola pra baixo", "digita oi", "volta". Ela lê só o texto da tela, e pergunta antes de tocar em comprar, pagar, enviar ou apagar.
 - **Notificações** (com o acesso às notificações): "o que chegou?" e, se você ligar, aviso quando chega mensagem.
 - **Puxa conversa**: se você some por um tempo (10 min, 30 min ou 2 h, ou nunca), ela chama, com o app aberto ou flutuando, fora do horário de 23h às 8h.
-- **Conversa pela janela flutuante**: toque nela para abrir o balão e o campo de texto. Quem responde é o app, então ele precisa continuar aberto ao fundo.
+- **Conversa pela janela flutuante**: toque nela para abrir o balão. Dá para digitar ou falar pelo microfone; o botão de infinito liga a conversa contínua (o microfone abre de novo depois de cada resposta) e o de alto-falante liga o modo silencioso (ela só escreve). Quem responde é o app, então ele precisa continuar aberto ao fundo.
+- **Frases livres**: pedidos como "role a página do tiktok", "próximo vídeo", "pausa", "aumenta o volume" ou "curte esse vídeo" são entendidos sem fórmula fixa; quando a frase não bate com um comando conhecido, o cérebro escolhe a ação.
 - **Mainframe** (ícone do chip): chave e modelo, voz, apelido, tamanho das respostas e tempo até dormir.
 
 ## O que veio do original

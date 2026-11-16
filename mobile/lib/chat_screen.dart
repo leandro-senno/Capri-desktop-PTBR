@@ -48,6 +48,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   ReceivePort? _port;
   StreamSubscription<dynamic>? _notices;
   DateTime? _lastNotice;
+
+  // Conversa contínua: depois de cada resposta o microfone abre de novo.
+  bool _handsFree = false;
+  bool _caught = false;
+  int _silences = 0;
   DateTime _lastActivity = DateTime.now();
   bool _foreground = true;
   static const List<String> _nudgeLines = [
@@ -78,6 +83,15 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _capri.talking = false;
       Link.send(Link.floating, {'type': 'talking', 'on': false});
       if (mounted) setState(() {});
+      _relisten();
+    };
+    // Rolar a tela desviando da janela flutuante: arrasta do lado em que ela não está.
+    Hands.swipeAt = () async {
+      if (!await FlutterOverlayWindow.isActive()) return 0.5;
+      final place = await FlutterOverlayWindow.getOverlayPosition();
+      if (!mounted) return 0.5;
+      final wide = MediaQuery.of(context).size.width;
+      return (place.x + FloatingCapri.chatWide / 2) / wide < 0.5 ? 0.92 : 0.08;
     };
     _voice.onShapes = (shapes) {
       _capri.lipSync(shapes);
@@ -86,7 +100,21 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     // A janela flutuante manda o que a pessoa digitou lá; a resposta volta pelo mesmo fio.
     _port = Link.listen(Link.app, (message) {
       final text = message['text'];
-      if (message['type'] == 'ask' && text is String) _send(text);
+      switch (message['type']) {
+        case 'ask':
+          if (text is String) _send(text);
+        case 'mic':
+          _micFromFloating();
+        case 'set':
+          if (message['voice'] is bool) _setVoice(message['voice'] as bool);
+          if (message['continuous'] is bool) {
+            _store.continuous = message['continuous'] as bool;
+            if (!_store.continuous) _handsFree = false;
+          }
+          _tellState();
+        case 'hello':
+          _tellState();
+      }
     });
     _nudges = Timer.periodic(const Duration(minutes: 1), (_) => _maybeNudge());
     // Notificações que chegam (só com o acesso ligado e o aviso ativado nas configurações).
@@ -239,6 +267,38 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _say(Line(false, title.isEmpty ? 'Chegou mensagem no $app.' : 'Chegou mensagem de $title no $app.'));
   }
 
+  /// Conta para a janela flutuante como estão o microfone, a voz e a conversa contínua.
+  void _tellState() {
+    Link.send(Link.floating, {'type': 'state', 'voice': _store.voice, 'continuous': _store.continuous, 'listening': _listening});
+  }
+
+  /// Modo silencioso: ela continua respondendo por escrito, sem falar.
+  void _setVoice(bool on) {
+    _store.voice = on;
+    if (!on) _voice.stop();
+    if (mounted) setState(() {});
+    _tellState();
+  }
+
+  /// Na conversa contínua, abre o microfone de novo quando ela termina de responder.
+  void _relisten() {
+    if (!_handsFree) return;
+    Future<void>.delayed(const Duration(milliseconds: 400), () {
+      if (!mounted || !_handsFree || _thinking || _speaking || _listening) return;
+      _listen();
+    });
+  }
+
+  /// O microfone pedido pela janela flutuante. Com o app em segundo plano, o Android só deixa ouvir
+  /// se o serviço de microfone foi ligado quando ela começou a flutuar.
+  Future<void> _micFromFloating() async {
+    if (!_listening && !_handsFree && !_foreground && !await Hands.earOn()) {
+      Link.send(Link.floating, {'type': 'reply', 'text': 'Para eu ouvir daqui, abra o app, toque no botão de janela para me guardar e de novo para me soltar, aceitando o microfone.'});
+      return;
+    }
+    await _toggleMic();
+  }
+
   void _busy(bool value) {
     _capri.thinking = value;
     if (mounted) setState(() => _thinking = value);
@@ -249,12 +309,12 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   void _say(Line line) {
     _add(line);
     Link.send(Link.floating, {'type': 'reply', 'text': line.text});
-    if (line.problem) return;
-    if (_store.voice) {
-      _voice.speak(line.text);
-    } else {
-      _capri.grin();
+    if (!line.problem && _store.voice) {
+      _voice.speak(line.text); // ao terminar de falar, a voz chama _relisten
+      return;
     }
+    if (!line.problem) _capri.grin();
+    _relisten();
   }
 
   Future<void> _send([String? heard]) async {
@@ -271,14 +331,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _busy(true);
     try {
       // Primeiro as mãos: abrir app ou link, tocar música, pesquisar. Depois ela comenta o que fez.
-      final deed = await Hands.handle(said);
+      var deed = await Hands.handle(said);
+      // Pedido em frase livre ("role a página do tiktok"): o cérebro escolhe as ações e as mãos executam.
+      if (deed == null && _brain.ready && Hands.looksLikeCommand(said)) {
+        deed = await Hands.perform(await _brain.route(said, await Hands.onScreen()));
+      }
       _brain.facts = _store.facts; // ela pode ter acabado de anotar ou esquecer algo
-      _brain.moment = await Hands.moment();
+      // Hora, bateria e clima só entram quando a pessoa pergunta por isso.
+      _brain.moment = deed == null && Hands.asksMoment(said) ? await Hands.moment() : null;
       String reply;
       var problem = false;
       if (deed != null) {
         reply = deed.line;
-        if (_brain.ready) {
+        if (deed.think && _brain.ready) {
           try {
             reply = await _brain.ask(said, note: deed.note);
           } catch (_) {
@@ -324,8 +389,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       final ticket = ++_ticket;
       _busy(true);
       try {
-        _brain.moment = await Hands.moment();
-        line = await _brain.ask(Brain.nudge);
+        _brain.moment = null;
+        line = await _brain.ask(Brain.nudge, hidden: true);
       } catch (_) {
         // sem cérebro agora: usa uma das falas prontas
       }
@@ -337,30 +402,60 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleMic() async {
-    if (_listening) {
+    if (_listening || _handsFree) {
+      _handsFree = false;
       await _voice.stopListening();
-      setState(() => _listening = false);
+      if (mounted) setState(() => _listening = false);
+      _tellState();
       return;
     }
+    _handsFree = _store.continuous;
+    _silences = 0;
+    await _listen();
+  }
+
+  Future<void> _listen() async {
     _capri.poke();
+    _caught = false;
     final started = await _voice.listen(
       onWords: (words, done) {
         if (!mounted) return;
         setState(() => _input.text = words);
+        Link.send(Link.floating, {'type': 'heard', 'text': words});
         if (done && words.trim().isNotEmpty) {
+          _caught = true;
+          _silences = 0;
           setState(() => _listening = false);
+          _tellState();
           _send(words);
         }
       },
       onStop: () {
-        if (mounted) setState(() => _listening = false);
+        if (!mounted) return;
+        final was = _listening;
+        setState(() => _listening = false);
+        _tellState();
+        // Conversa contínua: ninguém falou, então abre de novo. Depois de um minuto de silêncio ela para de ouvir.
+        if (was && _handsFree && !_caught) {
+          if (++_silences >= 12) {
+            _handsFree = false;
+            Link.send(Link.floating, {'type': 'reply', 'text': 'Parei de ouvir. Toca no microfone quando quiser falar.'});
+          } else {
+            _relisten();
+          }
+        }
       },
     );
     if (!mounted) return;
     if (started) {
       setState(() => _listening = true);
+      _tellState();
     } else {
-      _notice('Não consegui usar o microfone. Libere a permissão de microfone para a Capri nas configurações do Android.');
+      _handsFree = false;
+      _tellState();
+      const problem = 'Não consegui usar o microfone. Libere a permissão de microfone para a Capri nas configurações do Android.';
+      _notice(problem);
+      Link.send(Link.floating, {'type': 'reply', 'text': problem});
     }
   }
 
@@ -372,6 +467,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     try {
       if (await FlutterOverlayWindow.isActive()) {
         await FlutterOverlayWindow.closeOverlay();
+        await Hands.ear(false);
+        _handsFree = false;
         return;
       }
       if (!await FlutterOverlayWindow.isPermissionGranted()) {
@@ -394,7 +491,13 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         overlayTitle: 'Capri',
         overlayContent: 'Capri está flutuando. Para guardar, abra o app e toque no botão de janela.',
       );
-      if (mounted) _notice('Ela está flutuando. Dois toques: senta ou levanta. Segure e arraste para mover. Toque neste botão de novo para guardar.');
+      // Liga o serviço de microfone agora, com o app visível: é o que deixa ela ouvir depois, por cima de outros apps.
+      final ear = await Hands.ear(true);
+      if (mounted) {
+        _notice(ear
+            ? 'Ela está flutuando. Toque nela para conversar, por texto ou microfone. Toque neste botão de novo para guardar.'
+            : 'Ela está flutuando, mas sem microfone. Aceite a permissão de microfone e toque neste botão duas vezes para ativar.');
+      }
     } catch (_) {
       if (mounted) _notice('Não consegui abrir a janela flutuante neste aparelho.');
     }
@@ -508,6 +611,11 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       appBar: AppBar(
         title: const Text('CAPRI'),
         actions: [
+          IconButton(
+            tooltip: _store.voice ? 'Modo silencioso: ela para de falar' : 'Ela volta a falar',
+            icon: Icon(_store.voice ? Icons.volume_up_outlined : Icons.volume_off_outlined),
+            onPressed: () => _setVoice(!_store.voice),
+          ),
           IconButton(tooltip: 'Flutuar sobre outros apps', icon: const Icon(Icons.picture_in_picture_alt_outlined), onPressed: _float),
           IconButton(tooltip: 'Esquecer a conversa', icon: const Icon(Icons.delete_sweep_outlined), onPressed: _lines.isEmpty ? null : _forget),
           IconButton(tooltip: 'Configurações', icon: const Icon(Icons.memory_outlined), onPressed: _openSettings),

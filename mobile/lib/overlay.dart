@@ -24,7 +24,7 @@ class FloatingCapri extends StatefulWidget {
 
   /// Com a conversa aberta a janela cresce: mais larga e com este espaço extra em cima dela.
   static const double chatWide = 300;
-  static const double chatExtra = 190;
+  static const double chatExtra = 236;
 
   const FloatingCapri({super.key});
 
@@ -50,6 +50,9 @@ class _FloatingCapriState extends State<FloatingCapri> {
   Timer? _ack;
   bool _open = false;
   bool _waiting = false;
+  bool _listening = false;
+  bool _voiceOn = true;
+  bool _continuous = false;
   String _reply = 'Fala comigo, choom.';
   static const String _asleep = 'Abra o app da Capri uma vez e deixe ele aberto ao fundo: é lá que eu penso.';
 
@@ -81,10 +84,34 @@ class _FloatingCapriState extends State<FloatingCapri> {
         if (!_open) _toggleChat();
       case 'talking':
         _capri.talking = message['on'] == true;
+      case 'state':
+        setState(() {
+          _voiceOn = message['voice'] != false;
+          _continuous = message['continuous'] == true;
+          _listening = message['listening'] == true;
+        });
+      case 'heard':
+        // O que o microfone está entendendo aparece no campo, como se fosse digitado.
+        final words = message['text'];
+        if (words is String) _input.text = words;
       case 'shapes':
         final shapes = message['shapes'];
         if (shapes is List) _capri.lipSync(shapes.whereType<int>().toList());
     }
+  }
+
+  /// Pede ao app para abrir ou fechar o microfone (é o app que ouve e responde).
+  void _mic() {
+    _capri.poke();
+    if (!Link.send(Link.app, {'type': 'mic'})) setState(() => _reply = _asleep);
+  }
+
+  void _set({bool? voice, bool? continuous}) {
+    setState(() {
+      if (voice != null) _voiceOn = voice;
+      if (continuous != null) _continuous = continuous;
+    });
+    if (!Link.send(Link.app, {'type': 'set', 'voice': voice, 'continuous': continuous})) setState(() => _reply = _asleep);
   }
 
   void _ask() {
@@ -130,6 +157,16 @@ class _FloatingCapriState extends State<FloatingCapri> {
       // se a janela não puder crescer neste aparelho, a conversa abre no espaço que houver
     }
     if (mounted) setState(() => _open = open);
+    if (open) Link.send(Link.app, {'type': 'hello'});
+  }
+
+  Widget _toggle({required IconData icon, required bool on, required String tip, required VoidCallback onTap, Color? color}) {
+    return IconButton(
+      tooltip: tip,
+      visualDensity: VisualDensity.compact,
+      icon: Icon(icon, size: 22, color: color ?? (on ? Look.cyan : Look.dim)),
+      onPressed: onTap,
+    );
   }
 
   void _changed() {
@@ -303,7 +340,35 @@ class _FloatingCapriState extends State<FloatingCapri> {
                   ),
                 ),
                 IconButton(tooltip: 'Enviar', icon: const Icon(Icons.send, color: Look.cyan, size: 20), onPressed: _waiting ? null : _ask),
-                IconButton(tooltip: 'Fechar a conversa', icon: const Icon(Icons.close, color: Look.dim, size: 20), onPressed: _toggleChat),
+              ],
+            ),
+          ),
+          SizedBox(
+            height: 40,
+            child: Row(
+              children: [
+                _toggle(
+                  icon: _listening ? Icons.mic : Icons.mic_none,
+                  on: _listening,
+                  color: _listening ? Look.red : Look.cyan,
+                  tip: _listening ? 'Parar de ouvir' : 'Falar',
+                  onTap: _mic,
+                ),
+                _toggle(
+                  icon: Icons.all_inclusive,
+                  on: _continuous,
+                  tip: _continuous ? 'Conversa contínua ligada' : 'Conversa contínua: o microfone abre sozinho depois de cada resposta',
+                  onTap: () => _set(continuous: !_continuous),
+                ),
+                _toggle(
+                  icon: _voiceOn ? Icons.volume_up_outlined : Icons.volume_off_outlined,
+                  on: _voiceOn,
+                  tip: _voiceOn ? 'Modo silencioso: ela para de falar' : 'Ela volta a falar',
+                  onTap: () => _set(voice: !_voiceOn),
+                ),
+                const Spacer(),
+                Text(_listening ? 'OUVINDO' : (_continuous ? 'CONTÍNUA' : ''), style: TextStyle(fontFamily: Look.mono, fontSize: 11, letterSpacing: 2, color: _listening ? Look.red : Look.dim)),
+                _toggle(icon: Icons.close, on: false, tip: 'Fechar a conversa', onTap: _toggleChat),
               ],
             ),
           ),

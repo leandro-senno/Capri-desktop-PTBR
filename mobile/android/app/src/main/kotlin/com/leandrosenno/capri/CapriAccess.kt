@@ -73,6 +73,20 @@ class CapriAccess : AccessibilityService() {
         for (i in 0 until node.childCount) node.getChild(i)?.let { walk(it, lines) }
     }
 
+    private fun buttons(node: AccessibilityNodeInfo, found: MutableList<String>) {
+        if (found.size >= 40 || !node.isVisibleToUser) return
+        val shown = label(node)
+        if (shown.isNotEmpty() && shown.length <= 40 && (node.isClickable || node.isEditable) && !found.contains(shown)) found.add(shown)
+        for (i in 0 until node.childCount) node.getChild(i)?.let { buttons(it, found) }
+    }
+
+    /// Os nomes dos itens tocáveis na tela, para o cérebro escolher onde tocar.
+    fun tappable(): List<String> {
+        val found = ArrayList<String>()
+        for (root in roots()) buttons(root, found)
+        return found
+    }
+
     /// O texto visível na tela, de cima para baixo, e o app que está aberto.
     fun read(): Map<String, Any> {
         val lines = ArrayList<String>()
@@ -144,9 +158,10 @@ class CapriAccess : AccessibilityService() {
     }
 
     /// Rola a tela com um gesto de arrastar.
-    fun scroll(down: Boolean): Boolean {
+    /// [across] é onde arrastar, de 0 (esquerda) a 1 (direita), para desviar da janela flutuante.
+    fun scroll(down: Boolean, across: Float): Boolean {
         val metrics = resources.displayMetrics
-        val x = metrics.widthPixels / 2f
+        val x = metrics.widthPixels * across.coerceIn(0.05f, 0.95f)
         val from = metrics.heightPixels * (if (down) 0.7f else 0.3f)
         val to = metrics.heightPixels * (if (down) 0.3f else 0.7f)
         val path = Path()

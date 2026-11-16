@@ -532,6 +532,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             value: _store.voice,
             onChanged: (value) => setState(() => _store.voice = value),
           ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Conversa contínua'),
+            subtitle: const Text('Depois de responder, o microfone abre de novo sozinho', style: TextStyle(color: Look.dim, fontSize: 12)),
+            value: _store.continuous,
+            onChanged: (value) => setState(() => _store.continuous = value),
+          ),
           SegmentedButton<bool>(
             segments: const [
               ButtonSegment(value: false, label: Text('Voz do Android')),

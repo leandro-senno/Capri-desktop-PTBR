@@ -4,12 +4,14 @@ import android.Manifest
 import android.app.SearchManager
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.media.AudioManager
 import android.net.Uri
 import android.os.BatteryManager
 import android.provider.AlarmClock
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
+import android.view.KeyEvent
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
 import io.flutter.plugin.common.EventChannel
@@ -27,7 +29,7 @@ class MainActivity : FlutterActivity() {
             } catch (error: NotImplementedError) {
                 result.notImplemented()
             } catch (error: Exception) {
-                result.success(if (call.method == "apps" || call.method == "notices") emptyList<Map<String, Any>>() else if (call.method == "screen" || call.method == "contact" || call.method == "battery") null else false)
+                result.success(if (call.method == "apps" || call.method == "notices" || call.method == "tappable") emptyList<Map<String, Any>>() else if (call.method == "screen" || call.method == "contact" || call.method == "battery") null else false)
             }
         }
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, "capri/notices").setStreamHandler(object : EventChannel.StreamHandler {
@@ -90,9 +92,45 @@ class MainActivity : FlutterActivity() {
             "appSettings" -> start(Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:$packageName")))
             "screen" -> CapriAccess.instance?.read()
             "locate" -> CapriAccess.instance?.locate(text(call, "text"))
+            "tappable" -> CapriAccess.instance?.tappable() ?: emptyList<String>()
             "click" -> CapriAccess.instance?.click(text(call, "text"))
             "type" -> CapriAccess.instance?.type(text(call, "text")) ?: false
-            "scroll" -> CapriAccess.instance?.scroll(call.argument<Boolean>("down") ?: true) ?: false
+            "scroll" -> CapriAccess.instance?.scroll(call.argument<Boolean>("down") ?: true, (call.argument<Double>("x") ?: 0.5).toFloat()) ?: false
+            // Botões de mídia: valem para o que estiver tocando (Spotify, YouTube, TikTok...).
+            "media" -> {
+                val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                val code = when (text(call, "key")) {
+                    "next" -> KeyEvent.KEYCODE_MEDIA_NEXT
+                    "previous" -> KeyEvent.KEYCODE_MEDIA_PREVIOUS
+                    "pause" -> KeyEvent.KEYCODE_MEDIA_PAUSE
+                    "play" -> KeyEvent.KEYCODE_MEDIA_PLAY
+                    else -> KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE
+                }
+                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_DOWN, code))
+                audio.dispatchMediaKeyEvent(KeyEvent(KeyEvent.ACTION_UP, code))
+                true
+            }
+            "volume" -> {
+                val audio = getSystemService(AUDIO_SERVICE) as AudioManager
+                val way = if (call.argument<Boolean>("up") == true) AudioManager.ADJUST_RAISE else AudioManager.ADJUST_LOWER
+                repeat(2) { audio.adjustStreamVolume(AudioManager.STREAM_MUSIC, way, AudioManager.FLAG_SHOW_UI) }
+                true
+            }
+            // Liga ou desliga o serviço que mantém o microfone disponível com ela flutuando.
+            "ear" -> {
+                val intent = Intent(this, CapriEar::class.java)
+                if (call.argument<Boolean>("on") != true) {
+                    stopService(intent)
+                    false
+                } else if (checkSelfPermission(Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED) {
+                    requestPermissions(arrayOf(Manifest.permission.RECORD_AUDIO), 8)
+                    false
+                } else {
+                    if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent) else startService(intent)
+                    true
+                }
+            }
+            "earOn" -> CapriEar.running
             "global" -> CapriAccess.instance?.global(text(call, "action")) ?: false
             "noticesOn" -> CapriNotices.connected
             "noticeSettings" -> start(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))

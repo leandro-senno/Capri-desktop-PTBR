@@ -196,13 +196,24 @@ class Brain {
     var reply = text.replaceAll(RegExp(r'<think>[\s\S]*?</think>', caseSensitive: false), '');
     final open = reply.toLowerCase().lastIndexOf('</think>');
     if (open >= 0) reply = reply.substring(open + 8);
-    reply = reply.replaceAll('*', '').trim();
+    reply = reply.replaceAll('*', '');
+    // O modelo às vezes repete o carimbo do momento ou começa a fala com o próprio nome: isso sai.
+    reply = reply.replaceAll(RegExp(r'\[(?:Right now|Background)[^\]]*\]', caseSensitive: false), '');
+    reply = reply.trim();
+    final label = RegExp(r'^(?:capri|you|assistant|model)\s*[:>\-–—]+\s*', caseSensitive: false);
+    while (label.hasMatch(reply)) {
+      reply = reply.replaceFirst(label, '').trim();
+    }
+    // Se ele inventar a fala seguinte da pessoa, corta ali.
+    final next = RegExp(r'\n\s*(?:they|user|usu[aá]rio)\s*:', caseSensitive: false).firstMatch(reply);
+    if (next != null) reply = reply.substring(0, next.start).trim();
     return reply;
   }
 
   /// Manda a fala da pessoa e devolve a resposta da Capri.
   /// [note] é uma instrução extra só para esta resposta (por exemplo, o resultado de algo que ela acabou de fazer).
-  Future<String> ask(String said, {String? note}) => local ? _askLocal(said, note) : _askCloud(said, note);
+  /// Com [hidden], a fala não é da pessoa (é um empurrão do app) e não entra na memória da conversa.
+  Future<String> ask(String said, {String? note, bool hidden = false}) => local ? _askLocal(said, note, hidden) : _askCloud(said, note, hidden);
 
   /// O que ela diz quando resolve puxar conversa sozinha.
   static const String nudge =
@@ -211,12 +222,12 @@ class Brain {
   /// O que a pessoa pediu para ela lembrar. Vai no prompt de sistema.
   List<String> facts = const [];
 
-  /// O momento (dia, hora, bateria, clima). Vai junto da fala, para não mudar o prompt de sistema a cada minuto.
+  /// O momento (dia, hora, bateria, clima). Só é preenchido quando a pessoa pergunta por isso.
   String? moment;
 
   String _system(String? note) {
     final buffer = StringBuffer(character(nickname: nickname, wordiness: wordiness))
-      ..write('\nA line in [Right now: ...] before their message is background about this moment. Use it only when it matters and never read it out.');
+      ..write('\nNever start a reply with your name or any label, and never mention the battery, the time, the date or the weather unless they ask about it.');
     if (facts.isNotEmpty) {
       buffer.write('\nThings they asked you to remember about them (your long-term memory):');
       for (final fact in facts) {
@@ -227,19 +238,22 @@ class Brain {
     return buffer.toString();
   }
 
-  String _stamp(String said) => (moment ?? '').isEmpty ? said : '[Right now: $moment]\n$said';
+  String _stamp(String said) => (moment ?? '').isEmpty ? said : '[Background, because they are asking about it: $moment]\n$said';
 
-  Future<String> _askLocal(String said, String? note) async {
+  /// A conversa até aqui, em texto. O modelo local não guarda nada entre uma fala e outra:
+  /// cada resposta recebe a conversa recente de novo, e é isso que faz ela lembrar do que acabou de dizer.
+  String _transcript() {
+    if (_history.isEmpty) return '';
+    final lines = _history.map((turn) => '${turn['role'] == 'user' ? 'They said' : 'You said'}: ${turn['content']}').join('\n');
+    return '\n\nThe conversation so far, oldest first:\n$lines\n\nTheir next message continues this conversation. If you just asked or offered something, their message is the answer to it. Reply with your words only.';
+  }
+
+  Future<String> _local(String system, String said, int limit) async {
     if (!localReady) throw BrainException(offline);
-    // As últimas trocas, para a sessão do modelo recomeçar sem perder o fio.
-    final recent = _history.length > 6 ? _history.sublist(_history.length - 6) : _history;
-    final recap = recent.map((turn) => '${turn['role'] == 'user' ? 'User' : 'Capri'}: ${turn['content']}').join('\n');
-    final limit = [160, 300, 600][wordiness.clamp(0, 2).toInt()];
     final guarded = gpu && device.onGpu == null;
-    String reply;
     try {
       if (guarded) await gpuGuard?.call(true);
-      reply = await device.ask(system: _system(note), said: _stamp(said), limit: limit, gpu: gpu, recap: recap);
+      return await device.ask(system: system, said: said, limit: limit, gpu: gpu);
     } on TimeoutException {
       throw BrainException('Demorei demais pensando. Tente de novo, ou use uma chave nas configurações.');
     } catch (error) {
@@ -249,25 +263,100 @@ class Brain {
     } finally {
       if (guarded) await gpuGuard?.call(false);
     }
-    reply = _clean(reply);
+  }
+
+  Future<String> _askLocal(String said, String? note, bool hidden) async {
+    final limit = [160, 300, 600][wordiness.clamp(0, 2).toInt()];
+    final reply = _clean(await _local(_system(note) + _transcript(), _stamp(said), limit));
     if (reply.isEmpty) return declined;
-    _history.add({'role': 'user', 'content': said});
+    if (!hidden) _history.add({'role': 'user', 'content': said});
     _history.add({'role': 'assistant', 'content': reply});
     _trim();
     return reply;
   }
 
-  Future<String> _askCloud(String said, String? note) async {
+  /// Como o cérebro transforma um pedido em frase livre em ações no celular.
+  static const String _router =
+      "You turn a request written in Brazilian Portuguese into actions for an assistant that controls the user's Android phone. "
+      'Reply ONLY with action lines, one per line, at most 3 lines, with no other text. The actions are:\n'
+      'open <app name>\ntap <exact text of something on screen>\ntype <text>\nscroll down\nscroll up\nback\nhome\nrecents\n'
+      'play <song or artist>\npause\nresume\nnext\nprevious\nvolume up\nvolume down\nsearch <what to look up on the web>\nread screen\nnone\n'
+      'Rules: "scroll down" shows what comes next (the next video, post or part of the page). If they name an app to act in, put "open <app>" first. '
+      'For "tap", prefer a text from the list of things on screen. Use "read screen" when they ask what is on the screen. '
+      'Reply "none" when the message is conversation, a question for you, or you are not sure.';
+
+  /// Pergunta ao cérebro quais ações o pedido quer. Devolve as linhas de ação (vazio = é só conversa).
+  Future<List<String>> route(String said, List<String> onScreen) async {
+    if (!ready) return const [];
+    final system = onScreen.isEmpty ? _router : '$_router\nThings on screen now: ${onScreen.join('; ')}';
+    String answer;
+    try {
+      answer = local ? await _local(system, said, 60) : await _once(system, said, 80);
+    } catch (_) {
+      return const [];
+    }
+    final known = RegExp(r'^(?:open|tap|type|scroll|back|home|recents|play|pause|resume|next|previous|volume|search|read)\b', caseSensitive: false);
+    final actions = <String>[];
+    for (final raw in _clean(answer).split('\n')) {
+      final line = raw.replaceFirst(RegExp(r'^[\s\-\d.)`]+'), '').replaceAll('`', '').trim();
+      if (line.toLowerCase() == 'none') return const [];
+      if (known.hasMatch(line) && actions.length < 3) actions.add(line);
+    }
+    return actions;
+  }
+
+  /// Uma pergunta avulsa ao cérebro por chave, sem persona nem memória.
+  Future<String> _once(String system, String said, int limit) async {
+    final kind = this.kind;
+    final key = this.key;
+    final model = this.model;
+    if (kind == null || key == null || model == null) return '';
+    final Uri address;
+    final Map<String, Object?> body;
+    final turns = [
+      {'role': 'user', 'content': said},
+    ];
+    if (kind == 'anthropic') {
+      address = Uri.parse('$anthropic/v1/messages');
+      body = {'model': model, 'max_tokens': limit, 'system': system, 'messages': turns};
+    } else {
+      address = Uri.parse('${_base(kind)}/v1/chat/completions');
+      body = {
+        'model': model,
+        'messages': [
+          {'role': 'system', 'content': system},
+          ...turns,
+        ],
+        'stream': false,
+      };
+      if (kind != 'openai') {
+        body['max_tokens'] = limit;
+        body['temperature'] = 0;
+      }
+    }
+    final response = await http.post(address, headers: _headers(kind, key), body: jsonEncode(body)).timeout(const Duration(seconds: 20));
+    if (response.statusCode != 200) return '';
+    final decoded = jsonDecode(utf8.decode(response.bodyBytes));
+    if (kind == 'anthropic') {
+      final content = decoded['content'];
+      return content is List ? content.whereType<Map>().where((part) => part['type'] == 'text').map((part) => '${part['text']}').join() : '';
+    }
+    final choices = decoded['choices'];
+    if (choices is! List || choices.isEmpty) return '';
+    final message = choices.first['message'];
+    final content = message is Map ? message['content'] : null;
+    return content is String ? content : '';
+  }
+
+  Future<String> _askCloud(String said, String? note, bool hidden) async {
     final kind = this.kind;
     final key = this.key;
     final model = this.model;
     if (kind == null || key == null || model == null || model.isEmpty) throw BrainException(offline);
 
-    _history.add({'role': 'user', 'content': said});
-    _trim();
-    // Só a fala atual leva o carimbo do momento; o histórico guarda a fala limpa.
+    // A memória da conversa só muda quando a resposta chega; a fala atual leva o carimbo do momento, se houver.
     final turns = [
-      ..._history.sublist(0, _history.length - 1),
+      ..._history,
       {'role': 'user', 'content': _stamp(said)},
     ];
     final system = _system(note);
@@ -301,10 +390,8 @@ class Brain {
     try {
       response = await client.post(address, headers: _headers(kind, key), body: jsonEncode(body)).timeout(const Duration(seconds: 60));
     } on TimeoutException {
-      _history.removeLast();
       throw BrainException('Ainda pensando... a ${companyOf(kind)} demorou demais. Tente de novo.');
     } on http.ClientException {
-      _history.removeLast();
       throw BrainException('Sem conexão com a ${companyOf(kind)}. Confira a internet.');
     } finally {
       if (identical(_active, client)) _active = null;
@@ -312,7 +399,6 @@ class Brain {
     }
 
     if (response.statusCode != 200) {
-      _history.removeLast();
       throw BrainException(_explain(response.statusCode, kind));
     }
 
@@ -346,9 +432,9 @@ class Brain {
 
     reply = _clean(reply);
     if (reply.isEmpty) {
-      _history.removeLast();
       return declined;
     }
+    if (!hidden) _history.add({'role': 'user', 'content': said});
     _history.add({'role': 'assistant', 'content': reply});
     _trim();
     return reply;
