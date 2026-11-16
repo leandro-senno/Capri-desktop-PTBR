@@ -687,7 +687,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
                     _stopWalk();
                     _capri.toggleSeat();
                   },
-                  onLongPress: _capri.dance,
+                  onLongPress: () {
+                    if (_store.dance) _capri.dance();
+                  },
                   onPanStart: (_) {
                     _stopWalk();
                     _capri.poke();

@@ -111,7 +111,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     });
     try {
       final models = await Brain.listModels(key);
-      final kept = _model != null && models.contains(_model) ? _model : Brain.pickModel(kind, models);
+      final kept = _model != null && models.contains(_model) ? _model : Brain.pickModel(kind, models, _store.level);
       if (kept != null && !models.contains(kept)) models.insert(0, kept);
       await _store.saveKey(key);
       _store.model = kept;
@@ -154,6 +154,41 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
       _accessOn = access;
       _noticesOn = notices;
     });
+  }
+
+  /// Uma escolha entre poucas opções, com o título em cima.
+  Widget _choice<T>(String label, Map<T, String> options, T selected, void Function(T) onPick, {String? about}) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 14),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(label, style: const TextStyle(color: Look.dim, fontSize: 13)),
+          const SizedBox(height: 6),
+          SegmentedButton<T>(
+            showSelectedIcon: false,
+            segments: [for (final option in options.entries) ButtonSegment<T>(value: option.key, label: Text(option.value, softWrap: false))],
+            selected: {options.containsKey(selected) ? selected : options.keys.first},
+            onSelectionChanged: (picked) => setState(() => onPick(picked.first)),
+          ),
+          if (about != null)
+            Padding(
+              padding: const EdgeInsets.only(top: 6),
+              child: Text(about, style: const TextStyle(color: Look.dim, fontSize: 12, height: 1.4)),
+            ),
+        ],
+      ),
+    );
+  }
+
+  /// Mudar o nível troca o modelo escolhido na chave: busca a lista de novo e escolhe pelo nível.
+  void _setLevel(int level) {
+    _store.level = level;
+    if (!_store.local && (_store.key ?? '').isNotEmpty) {
+      _model = null;
+      _store.model = null;
+      _connect();
+    }
   }
 
   Widget _permission(String name, bool on, String about, VoidCallback open) {
@@ -199,6 +234,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
       Align(
         alignment: Alignment.centerLeft,
         child: TextButton(onPressed: Hands.openAppSettings, child: const Text('Liberar configurações restritas')),
+      ),
+      _choice<int>(
+        'Assistir e comentar (olha a tela enquanto flutua)',
+        const {0: 'Nunca', 1: '1 min', 3: '3 min', 5: '5 min'},
+        _store.watchMinutes,
+        (value) => _store.watchMinutes = value,
+        about: 'Com ela flutuando, de tempos em tempos ela tira uma foto da tela e comenta o que você está jogando ou fazendo. Precisa de "Ver e controlar a tela". Com cérebro por chave, a foto vai para o provedor da chave; com o cérebro no celular, fica no aparelho e gasta mais bateria.',
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
@@ -479,6 +521,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             onSelectionChanged: (picked) => setState(() => _store.local = picked.first),
           ),
           const SizedBox(height: 12),
+          _choice<int>(
+            'Inteligência',
+            const {0: 'Normal', 1: 'Maior', 2: 'Máxima'},
+            _store.level,
+            _setLevel,
+            about: 'Quanto maior, mais passos ela dá numa tarefa (6, 10 ou 16) e, no cérebro por chave, maior e mais lento o modelo escolhido. O cérebro no celular é sempre o mesmo modelo.',
+          ),
           if (_store.local) ..._localBrain() else ...[
             const Text(
               'Ela pensa pela chave que você colar aqui. A chave da NVIDIA é grátis. A conversa passa pelos servidores do provedor da chave.',
@@ -532,6 +581,20 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             value: _store.voice,
             onChanged: (value) => setState(() => _store.voice = value),
           ),
+          Row(
+            children: [
+              const Text('Volume da voz', style: TextStyle(color: Look.dim, fontSize: 13)),
+              Expanded(
+                child: Slider(
+                  value: _store.volume,
+                  divisions: 10,
+                  label: '${(_store.volume * 100).round()}%',
+                  activeColor: Look.cyan,
+                  onChanged: (value) => setState(() => _store.volume = value),
+                ),
+              ),
+            ],
+          ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
             title: const Text('Conversa contínua'),
@@ -571,6 +634,31 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             decoration: const InputDecoration(labelText: 'Como ela te chama (opcional)', counterText: ''),
           ),
           const SizedBox(height: 14),
+          _choice<String>(
+            'Idioma em que ela fala e ouve',
+            const {'pt': 'Português', 'en': 'English', 'es': 'Español'},
+            _store.language,
+            (value) => _store.language = value,
+          ),
+          _choice<int>('Tamanho dela', const {0: 'Pequena', 1: 'Normal', 2: 'Grande'}, _store.size, (value) => _store.size = value, about: 'Na janela flutuante, vale da próxima vez que você soltar ela.'),
+          _choice<int>('Ritmo do passeio', const {0: 'Raro', 1: 'Normal', 2: 'Frequente'}, _store.pace, (value) => _store.pace = value),
+          _choice<int>('Quanto da conversa ela lembra', const {4: '4 trocas', 8: '8 trocas', 16: '16 trocas'}, _store.recall, (value) => _store.recall = value, about: 'Mais trocas deixam o cérebro no celular mais lento.'),
+          _choice<int>('Balão na janela flutuante, quando ela fala sozinha', const {8: '8 s', 15: '15 s', 30: '30 s', 0: 'Fica'}, _store.bubbleSeconds, (value) => _store.bubbleSeconds = value),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Efeito de digitação'),
+            subtitle: const Text('A resposta aparece letra por letra', style: TextStyle(color: Look.dim, fontSize: 12)),
+            value: _store.typing,
+            onChanged: (value) => setState(() => _store.typing = value),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
+            title: const Text('Dança'),
+            subtitle: const Text('Ela dança quando você segura o dedo nela', style: TextStyle(color: Look.dim, fontSize: 12)),
+            value: _store.dance,
+            onChanged: (value) => setState(() => _store.dance = value),
+          ),
+          const SizedBox(height: 6),
           const Text('Tamanho das respostas', style: TextStyle(color: Look.dim, fontSize: 13)),
           const SizedBox(height: 6),
           SegmentedButton<int>(
