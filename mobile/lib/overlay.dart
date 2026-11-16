@@ -9,6 +9,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import 'link.dart';
 import 'look.dart';
 import 'sprite.dart';
+import 'typed_text.dart';
 
 /// A Capri flutuando por cima dos outros apps, com as mesmas animações do app:
 /// senta e levanta, fica pendurada enquanto você a segura, passeia pela tela, pisca, dança e dorme.
@@ -19,8 +20,10 @@ import 'sprite.dart';
 /// A conversa daqui é respondida pelo app (é lá que ficam o cérebro e a voz), pelo fio de [Link].
 class FloatingCapri extends StatefulWidget {
   /// Tamanho da janela flutuante, em dp. Em pé ela ocupa a altura toda; sentada, um quadrado embaixo.
-  static const double wide = 170;
-  static const double tall = 250;
+  /// O tamanho dela escolhido nas configurações (0,8, 1 ou 1,25).
+  static double scale = 1;
+  static double get wide => 170 * scale;
+  static double get tall => 250 * scale;
 
   /// Com a conversa aberta a janela cresce: mais larga e com este espaço extra em cima dela.
   static const double chatWide = 300;
@@ -52,6 +55,15 @@ class _FloatingCapriState extends State<FloatingCapri> {
   bool _waiting = false;
   bool _listening = false;
   bool _voiceOn = true;
+  bool _tasking = false;
+  bool _touched = false;
+  Timer? _autoClose;
+
+  // Ajustes dela, lidos das preferências do app.
+  int _bubbleSeconds = 15;
+  bool _typing = true;
+  bool _dance = true;
+  int _pace = 1;
   bool _continuous = false;
   String _reply = 'Fala comigo, choom.';
   static const String _asleep = 'Abra o app da Capri uma vez e deixe ele aberto ao fundo: é lá que eu penso.';
@@ -81,7 +93,22 @@ class _FloatingCapriState extends State<FloatingCapri> {
           _waiting = false;
           if (text is String) _reply = text;
         });
-        if (!_open) _toggleChat();
+        // Ela falou sem a conversa estar aberta (puxou assunto, comentou a tela): o balão abre e fecha sozinho.
+        if (!_open) {
+          _touched = false;
+          _toggleChat();
+          _autoClose?.cancel();
+          if (_bubbleSeconds > 0) {
+            _autoClose = Timer(Duration(seconds: _bubbleSeconds), () {
+              if (mounted && _open && !_touched && !_waiting) _toggleChat();
+            });
+          }
+        }
+      case 'tasking':
+        setState(() => _tasking = message['on'] == true);
+      case 'note':
+        final note = message['text'];
+        if (note is String) setState(() => _reply = note);
       case 'talking':
         _capri.talking = message['on'] == true;
       case 'state':
@@ -102,6 +129,7 @@ class _FloatingCapriState extends State<FloatingCapri> {
 
   /// Pede ao app para abrir ou fechar o microfone (é o app que ouve e responde).
   void _mic() {
+    _touched = true;
     _capri.poke();
     if (!Link.send(Link.app, {'type': 'mic'})) setState(() => _reply = _asleep);
   }
@@ -117,6 +145,7 @@ class _FloatingCapriState extends State<FloatingCapri> {
   void _ask() {
     final text = _input.text.trim();
     if (text.isEmpty || _waiting) return;
+    _touched = true;
     _input.clear();
     _capri.poke();
     if (!Link.send(Link.app, {'type': 'ask', 'text': text})) {
@@ -178,6 +207,12 @@ class _FloatingCapriState extends State<FloatingCapri> {
       final prefs = await SharedPreferences.getInstance();
       await prefs.reload();
       _wander = prefs.getBool('wander') ?? true;
+      _bubbleSeconds = prefs.getInt('bubble_seconds') ?? 15;
+      _typing = prefs.getBool('typing') ?? true;
+      _dance = prefs.getBool('dance') ?? true;
+      _pace = (prefs.getInt('pace') ?? 1).clamp(0, 2).toInt();
+      FloatingCapri.scale = const [0.8, 1.0, 1.25][(prefs.getInt('size') ?? 1).clamp(0, 2).toInt()];
+      if (mounted) setState(() {});
       final minutes = prefs.getInt('sleep_minutes') ?? 3;
       _capri.sleepAfter = minutes * 60.0;
     } catch (_) {
@@ -208,7 +243,7 @@ class _FloatingCapriState extends State<FloatingCapri> {
   /// De vez em quando ela anda pela tela, senta ou levanta sozinha.
   void _roam() {
     if (!mounted || !_wander || _open || !_capri.calm || _capri.sleeping || _downAt != null) return;
-    final dice = _random.nextInt(100);
+    final dice = _random.nextInt(100) / const [0.4, 1.0, 2.0][_pace];
     if (_capri.seated) {
       if (dice < 25) _capri.stand();
       return;
@@ -282,7 +317,7 @@ class _FloatingCapriState extends State<FloatingCapri> {
         final after = await FlutterOverlayWindow.getOverlayPosition();
         if (before != null) moved = (after.x - before.x).abs() > 6 || (after.y - before.y).abs() > 6;
       } catch (_) {}
-      if (!moved && held.inMilliseconds >= 700) _capri.dance();
+      if (!moved && held.inMilliseconds >= 700 && _dance) _capri.dance();
       return;
     }
 
@@ -318,8 +353,9 @@ class _FloatingCapriState extends State<FloatingCapri> {
               padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
               decoration: BoxDecoration(color: Look.panel, border: Border.all(color: Look.cyan.withAlpha(160)), borderRadius: BorderRadius.circular(4)),
               child: SingleChildScrollView(
-                child: Text(
-                  _waiting ? 'CAPRI> ...' : 'CAPRI> $_reply',
+                child: TypedText(
+                  _waiting && !_tasking ? 'CAPRI> ...' : 'CAPRI> $_reply',
+                  animate: _typing && !_waiting,
                   style: const TextStyle(fontFamily: Look.mono, color: Look.cyan, fontSize: 14, height: 1.3),
                 ),
               ),
@@ -335,11 +371,14 @@ class _FloatingCapriState extends State<FloatingCapri> {
                     controller: _input,
                     textInputAction: TextInputAction.send,
                     onSubmitted: (_) => _ask(),
+                    onTap: () => _touched = true,
                     style: const TextStyle(fontFamily: Look.mono, color: Look.ink, fontSize: 14),
                     decoration: const InputDecoration(hintText: 'Diga algo', isDense: true, contentPadding: EdgeInsets.symmetric(horizontal: 10, vertical: 10)),
                   ),
                 ),
-                IconButton(tooltip: 'Enviar', icon: const Icon(Icons.send, color: Look.cyan, size: 20), onPressed: _waiting ? null : _ask),
+                _tasking
+                    ? IconButton(tooltip: 'Parar a tarefa', icon: const Icon(Icons.stop_circle_outlined, color: Look.red, size: 22), onPressed: () => Link.send(Link.app, {'type': 'stop'}))
+                    : IconButton(tooltip: 'Enviar', icon: const Icon(Icons.send, color: Look.cyan, size: 20), onPressed: _waiting ? null : _ask),
               ],
             ),
           ),

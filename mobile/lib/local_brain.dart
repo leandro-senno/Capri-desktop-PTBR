@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:typed_data';
 
 import 'package:flutter_gemma/flutter_gemma.dart';
 import 'package:flutter_gemma_litertlm/flutter_gemma_litertlm.dart';
@@ -18,6 +19,10 @@ class LocalBrain {
 
   dynamic _model;
   bool? _loadedGpu;
+  bool _vision = false;
+
+  /// true depois que abrir uma imagem falhou neste aparelho: ela passa a usar só texto.
+  bool blind = false;
 
   /// Em qual processador o modelo foi carregado (null = ainda não carregou).
   bool? get onGpu => _loadedGpu;
@@ -51,6 +56,7 @@ class LocalBrain {
     final model = _model;
     _model = null;
     _loadedGpu = null;
+    _vision = false;
     try {
       await model?.close();
     } catch (_) {}
@@ -64,30 +70,40 @@ class LocalBrain {
   }
 
   /// Carrega o modelo na memória. Tenta a placa de vídeo quando [gpu] é true e cai para o processador se falhar.
-  Future<void> load({required bool gpu}) async {
-    if (_model != null && (_loadedGpu == gpu || (gpu && _loadedGpu == false))) return;
+  /// Com [vision], carrega também a parte do modelo que enxerga imagens (usa mais memória).
+  Future<void> load({required bool gpu, bool vision = false}) async {
+    final sameChip = _loadedGpu == gpu || (gpu && _loadedGpu == false);
+    if (_model != null && sameChip && (_vision || !vision)) return;
     await unload();
     if (!_activated) await install();
     if (gpu) {
       try {
-        _model = await FlutterGemma.getActiveModel(maxTokens: 4096, preferredBackend: PreferredBackend.gpu);
+        _model = vision
+            ? await FlutterGemma.getActiveModel(maxTokens: 4096, preferredBackend: PreferredBackend.gpu, supportImage: true, maxNumImages: 1)
+            : await FlutterGemma.getActiveModel(maxTokens: 4096, preferredBackend: PreferredBackend.gpu);
         _loadedGpu = true;
+        _vision = vision;
         return;
       } catch (_) {
         _model = null;
       }
     }
-    _model = await FlutterGemma.getActiveModel(maxTokens: 4096, preferredBackend: PreferredBackend.cpu);
+    _model = vision
+        ? await FlutterGemma.getActiveModel(maxTokens: 4096, preferredBackend: PreferredBackend.cpu, supportImage: true, maxNumImages: 1)
+        : await FlutterGemma.getActiveModel(maxTokens: 4096, preferredBackend: PreferredBackend.cpu);
     _loadedGpu = false;
+    _vision = vision;
   }
 
   /// Responde a uma fala. Cada chamada é uma sessão nova: quem chama manda no [system] tudo que o modelo
   /// precisa saber, inclusive a conversa recente. Assim a memória não depende do estado interno do motor.
-  Future<String> ask({required String system, required String said, required int limit, required bool gpu}) async {
-    await load(gpu: gpu);
-    final chat = await _model.createChat(systemInstruction: system, maxOutputTokens: limit);
+  Future<String> ask({required String system, required String said, required int limit, required bool gpu, Uint8List? image}) async {
+    await load(gpu: gpu, vision: image != null);
+    final chat = image == null
+        ? await _model.createChat(systemInstruction: system, maxOutputTokens: limit)
+        : await _model.createChat(systemInstruction: system, maxOutputTokens: limit, supportImage: true);
     try {
-      await chat.addQueryChunk(Message.text(text: said, isUser: true));
+      await chat.addQueryChunk(image == null ? Message.text(text: said, isUser: true) : Message.withImage(text: said, imageBytes: image, isUser: true));
       final reply = StringBuffer();
       final Stream<dynamic> stream = chat.generateChatResponseAsync();
       await for (final event in stream.timeout(const Duration(seconds: 120))) {

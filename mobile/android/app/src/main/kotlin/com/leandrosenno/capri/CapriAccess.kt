@@ -3,11 +3,15 @@ package com.leandrosenno.capri
 import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
+import android.graphics.Bitmap
 import android.graphics.Path
+import android.os.Build
 import android.os.Bundle
+import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
+import java.io.ByteArrayOutputStream
 import java.text.Normalizer
 
 /// Os olhos e as mãos da Capri em outros apps: lê o texto da tela e toca, rola e digita.
@@ -158,6 +162,46 @@ class CapriAccess : AccessibilityService() {
     }
 
     /// Rola a tela com um gesto de arrastar.
+    /// Tira uma foto da tela e entrega em JPEG reduzido (lado maior de 1024 px), ou null se não der.
+    /// Só no Android 11 ou mais novo. Telas protegidas (banco, senha) saem pretas, por decisão do sistema.
+    fun shot(done: (ByteArray?) -> Unit) {
+        if (Build.VERSION.SDK_INT < 30) {
+            done(null)
+            return
+        }
+        try {
+            takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
+                override fun onSuccess(result: ScreenshotResult) {
+                    var bytes: ByteArray? = null
+                    try {
+                        val hard = Bitmap.wrapHardwareBuffer(result.hardwareBuffer, result.colorSpace)
+                        val soft = hard?.copy(Bitmap.Config.ARGB_8888, false)
+                        result.hardwareBuffer.close()
+                        if (soft != null) {
+                            val ratio = 1024f / maxOf(soft.width, soft.height)
+                            val small = if (ratio < 1f) Bitmap.createScaledBitmap(soft, (soft.width * ratio).toInt(), (soft.height * ratio).toInt(), true) else soft
+                            val out = ByteArrayOutputStream()
+                            small.compress(Bitmap.CompressFormat.JPEG, 72, out)
+                            bytes = out.toByteArray()
+                        }
+                    } catch (error: Exception) {
+                        bytes = null
+                    }
+                    done(bytes)
+                }
+
+                override fun onFailure(errorCode: Int) {
+                    done(null)
+                }
+            })
+        } catch (error: Exception) {
+            done(null)
+        }
+    }
+
+    /// O app que está na frente agora (fora a própria Capri).
+    fun front(): String = roots().firstOrNull()?.packageName?.toString() ?: ""
+
     /// [across] é onde arrastar, de 0 (esquerda) a 1 (direita), para desviar da janela flutuante.
     fun scroll(down: Boolean, across: Float): Boolean {
         val metrics = resources.displayMetrics

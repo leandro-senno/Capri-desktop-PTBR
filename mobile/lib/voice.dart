@@ -189,6 +189,13 @@ class Voice {
   String? voiceId;
   String? voiceModel;
 
+  /// Idioma em que ela fala e ouve (pt, en ou es) e volume da voz, de 0 a 1.
+  String language = 'pt';
+  double volume = 1;
+
+  static const Map<String, String> _speakIn = {'pt': 'pt-BR', 'en': 'en-US', 'es': 'es-ES'};
+  static const Map<String, String> _hearIn = {'pt': 'pt_BR', 'en': 'en_US', 'es': 'es_ES'};
+
   void Function()? onStart;
   void Function()? onDone;
 
@@ -233,6 +240,7 @@ class Voice {
         if (ticket != _ticket) return; // outra fala começou enquanto esta baixava
         _finished ??= _speech.onPlayerComplete.listen((_) => onDone?.call());
         onShapes?.call(Eleven.mouths(wav, 12));
+        await _speech.setVolume(volume);
         await _speech.play(BytesSource(wav, mimeType: 'audio/wav'));
         onStart?.call();
         return;
@@ -245,6 +253,8 @@ class Voice {
     }
     await _prepare();
     try {
+      await _tts.setLanguage(_speakIn[language] ?? 'pt-BR');
+      await _tts.setVolume(volume);
       await _tts.speak(words);
     } catch (_) {
       onDone?.call();
@@ -269,6 +279,7 @@ class Voice {
   /// Toca um dos cumprimentos gravados do original (hello-morning, hello-late, hello-miss).
   Future<void> hello(String name) async {
     try {
+      await _player.setVolume(volume);
       await _player.play(AssetSource('voice/hello-$name.wav'));
     } catch (_) {}
   }
@@ -290,7 +301,7 @@ class Voice {
       await stop();
       await _ears.listen(
         onResult: (SpeechRecognitionResult result) => onWords(result.recognizedWords, result.finalResult),
-        localeId: 'pt_BR',
+        localeId: _hearIn[language] ?? 'pt_BR',
         listenOptions: SpeechListenOptions(partialResults: true, cancelOnError: true),
         pauseFor: const Duration(seconds: 3),
         listenFor: const Duration(seconds: 30),

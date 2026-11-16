@@ -130,6 +130,46 @@ class Store {
   bool get announce => _prefs.getBool('announce') ?? false;
   set announce(bool value) => _prefs.setBool('announce', value);
 
+  /// Nível de inteligência: 0 normal, 1 maior, 2 máximo. Muda o modelo escolhido na chave e quantos passos ela dá numa tarefa.
+  int get level => (_prefs.getInt('level') ?? 0).clamp(0, 2).toInt();
+  set level(int value) => _prefs.setInt('level', value);
+
+  /// Tamanho dela: 0 pequena, 1 normal, 2 grande.
+  int get size => (_prefs.getInt('size') ?? 1).clamp(0, 2).toInt();
+  set size(int value) => _prefs.setInt('size', value);
+  double get scale => const [0.8, 1.0, 1.25][size];
+
+  /// Volume da voz, de 0 a 1.
+  double get volume => (_prefs.getDouble('volume') ?? 1.0).clamp(0.0, 1.0).toDouble();
+  set volume(double value) => _prefs.setDouble('volume', value);
+
+  /// Ritmo do passeio: 0 raro, 1 normal, 2 frequente.
+  int get pace => (_prefs.getInt('pace') ?? 1).clamp(0, 2).toInt();
+  set pace(int value) => _prefs.setInt('pace', value);
+
+  /// Segundos que o balão da janela flutuante fica aberto quando ela fala sozinha (0 = fica aberto).
+  int get bubbleSeconds => _prefs.getInt('bubble_seconds') ?? 15;
+  set bubbleSeconds(int value) => _prefs.setInt('bubble_seconds', value);
+
+  /// Mostrar a resposta letra por letra.
+  bool get typing => _prefs.getBool('typing') ?? true;
+  set typing(bool value) => _prefs.setBool('typing', value);
+
+  /// Quantas trocas da conversa ela lembra.
+  int get recall => _prefs.getInt('recall') ?? 8;
+  set recall(int value) => _prefs.setInt('recall', value);
+
+  bool get dance => _prefs.getBool('dance') ?? true;
+  set dance(bool value) => _prefs.setBool('dance', value);
+
+  /// Idioma em que ela fala e ouve: pt, en ou es.
+  String get language => _prefs.getString('language') ?? 'pt';
+  set language(String value) => _prefs.setString('language', value);
+
+  /// De quantos em quantos minutos ela olha a tela e comenta, enquanto flutua (0 = não assiste).
+  int get watchMinutes => _prefs.getInt('watch_minutes') ?? 0;
+  set watchMinutes(int value) => _prefs.setInt('watch_minutes', value);
+
   /// Conversa contínua: depois de responder, o microfone abre de novo sozinho.
   bool get continuous => _prefs.getBool('continuous') ?? false;
   set continuous(bool value) => _prefs.setBool('continuous', value);

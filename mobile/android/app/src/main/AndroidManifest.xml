@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS"/>
     <!-- Ouvir pelo microfone com ela flutuando sobre outros apps -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE"/>
+    <!-- Fechar um app a pedido da pessoa (encerra o que ele deixou em segundo plano) -->
+    <uses-permission android:name="android.permission.KILL_BACKGROUND_PROCESSES"/>
     <!-- Criar alarmes e timers no relógio do Android -->
     <uses-permission android:name="com.android.alarm.permission.SET_ALARM"/>
     <!-- Achar o número de um contato pelo nome, para ligar ou mandar mensagem -->

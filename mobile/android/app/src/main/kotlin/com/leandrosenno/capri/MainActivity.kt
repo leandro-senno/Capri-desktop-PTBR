@@ -1,10 +1,15 @@
 package com.leandrosenno.capri
 
 import android.Manifest
+import android.app.ActivityManager
 import android.app.SearchManager
+import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.media.AudioManager
+import android.media.MediaMetadata
+import android.media.session.MediaSessionManager
+import android.media.session.PlaybackState
 import android.net.Uri
 import android.os.BatteryManager
 import android.provider.AlarmClock
@@ -24,12 +29,18 @@ class MainActivity : FlutterActivity() {
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "capri/hands").setMethodCallHandler { call, result ->
+            if (call.method == "shot") {
+                // A foto da tela chega depois, por isso responde fora do fluxo comum.
+                val access = CapriAccess.instance
+                if (access == null) result.success(null) else access.shot { bytes -> result.success(bytes) }
+                return@setMethodCallHandler
+            }
             try {
                 result.success(handle(call))
             } catch (error: NotImplementedError) {
                 result.notImplemented()
             } catch (error: Exception) {
-                result.success(if (call.method == "apps" || call.method == "notices" || call.method == "tappable") emptyList<Map<String, Any>>() else if (call.method == "screen" || call.method == "contact" || call.method == "battery") null else false)
+                result.success(if (call.method == "apps" || call.method == "notices" || call.method == "tappable") emptyList<Map<String, Any>>() else if (call.method == "screen" || call.method == "contact" || call.method == "battery" || call.method == "playing") null else false)
             }
         }
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, "capri/notices").setStreamHandler(object : EventChannel.StreamHandler {
@@ -132,11 +143,46 @@ class MainActivity : FlutterActivity() {
             }
             "earOn" -> CapriEar.running
             "global" -> CapriAccess.instance?.global(text(call, "action")) ?: false
+            "playing" -> playing()
+            // Fechar um app: vai para a tela inicial se ele estiver na frente e encerra o que ficou em segundo plano.
+            "close" -> {
+                val target = text(call, "package")
+                if (CapriAccess.instance?.front() == target) CapriAccess.instance?.global("home")
+                android.os.Handler(mainLooper).postDelayed({
+                    try {
+                        (getSystemService(ACTIVITY_SERVICE) as ActivityManager).killBackgroundProcesses(target)
+                    } catch (error: Exception) {
+                    }
+                }, 900)
+                true
+            }
+            "front" -> CapriAccess.instance?.front() ?: ""
             "noticesOn" -> CapriNotices.connected
             "noticeSettings" -> start(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             "notices" -> CapriNotices.latest()
             else -> throw NotImplementedError()
         }
+    }
+
+    /// O que está tocando agora, lido das sessões de mídia. Precisa do acesso às notificações.
+    private fun playing(): Map<String, Any>? {
+        val manager = getSystemService(MEDIA_SESSION_SERVICE) as MediaSessionManager
+        val sessions = manager.getActiveSessions(ComponentName(this, CapriNotices::class.java))
+        var found: Map<String, Any>? = null
+        for (session in sessions) {
+            val title = session.metadata?.getString(MediaMetadata.METADATA_KEY_TITLE) ?: continue
+            val artist = session.metadata?.getString(MediaMetadata.METADATA_KEY_ARTIST) ?: ""
+            val live = session.playbackState?.state == PlaybackState.STATE_PLAYING
+            val app = try {
+                packageManager.getApplicationLabel(packageManager.getApplicationInfo(session.packageName, 0)).toString()
+            } catch (error: Exception) {
+                session.packageName
+            }
+            val item = mapOf<String, Any>("title" to title, "artist" to artist, "app" to app, "playing" to live)
+            if (live) return item
+            if (found == null) found = item
+        }
+        return found
     }
 
     /// Procura um contato pelo nome. Sem a permissão, pede e devolve {"granted": false}.
