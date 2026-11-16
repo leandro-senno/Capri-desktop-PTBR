@@ -287,24 +287,30 @@ class Voice {
   bool get listening => _ears.isListening;
 
   /// Começa a ouvir. Devolve false se o microfone ou o reconhecimento não estiverem disponíveis.
+  /// O aviso de "parou de ouvir" da escuta atual. O reconhecimento é iniciado uma vez só,
+  /// então o aviso fica aqui e é trocado a cada escuta, para nunca chegar a uma escuta antiga.
+  void Function()? _stopped;
+
   Future<bool> listen({required void Function(String words, bool done) onWords, required void Function() onStop}) async {
     try {
       if (!_earsReady) {
         _earsReady = await _ears.initialize(
           onStatus: (status) {
-            if (status == 'done' || status == 'notListening') onStop();
+            if (status == 'done' || status == 'notListening') _stopped?.call();
           },
-          onError: (_) => onStop(),
+          onError: (_) => _stopped?.call(),
         );
       }
       if (!_earsReady) return false;
       await stop();
+      _stopped = onStop;
       await _ears.listen(
         onResult: (SpeechRecognitionResult result) => onWords(result.recognizedWords, result.finalResult),
         localeId: _hearIn[language] ?? 'pt_BR',
         listenOptions: SpeechListenOptions(partialResults: true, cancelOnError: true),
-        pauseFor: const Duration(seconds: 3),
-        listenFor: const Duration(seconds: 30),
+        // Depois de 1,8 s de silêncio ela entende que você terminou de falar.
+        pauseFor: const Duration(milliseconds: 1800),
+        listenFor: const Duration(seconds: 45),
       );
       return true;
     } catch (_) {

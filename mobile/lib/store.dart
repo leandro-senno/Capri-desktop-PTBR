@@ -171,7 +171,7 @@ class Store {
   set watchMinutes(int value) => _prefs.setInt('watch_minutes', value);
 
   /// Conversa contínua: depois de responder, o microfone abre de novo sozinho.
-  bool get continuous => _prefs.getBool('continuous') ?? false;
+  bool get continuous => _prefs.getBool('continuous') ?? true;
   set continuous(bool value) => _prefs.setBool('continuous', value);
 
   /// Ela passeia e senta sozinha.

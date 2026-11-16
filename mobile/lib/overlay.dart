@@ -84,6 +84,7 @@ class _FloatingCapriState extends State<FloatingCapri> {
       case 'thinking':
         _ack?.cancel();
         _capri.thinking = true;
+        _input.clear(); // o que o microfone escreveu já foi enviado
         setState(() => _waiting = true);
       case 'reply':
         _ack?.cancel();

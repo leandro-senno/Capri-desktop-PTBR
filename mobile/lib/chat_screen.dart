@@ -524,28 +524,44 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   Future<void> _listen() async {
     _capri.poke();
     _caught = false;
+    var heard = '';
+
+    // Envia o que foi ouvido, uma vez só. Não depende da marca de "frase final" do reconhecimento,
+    // que em alguns aparelhos (como os Galaxy) nem sempre chega: quando a escuta para, o que foi ouvido vai.
+    void finish() {
+      if (!mounted || _caught) return;
+      final words = heard.trim();
+      if (words.isEmpty) return;
+      _caught = true;
+      _silences = 0;
+      setState(() => _listening = false);
+      _tellState();
+      _send(words);
+    }
+
     final started = await _voice.listen(
       onWords: (words, done) {
-        if (!mounted) return;
+        if (!mounted || _caught) return;
+        heard = words;
         setState(() => _input.text = words);
         Link.send(Link.floating, {'type': 'heard', 'text': words});
-        if (done && words.trim().isNotEmpty) {
-          _caught = true;
-          _silences = 0;
-          setState(() => _listening = false);
-          _tellState();
-          _send(words);
-        }
+        if (done) finish();
       },
       onStop: () {
-        if (!mounted) return;
+        if (!mounted || _caught) return;
         final was = _listening;
         setState(() => _listening = false);
         _tellState();
+        if (heard.trim().isNotEmpty) {
+          // A frase final às vezes chega logo depois do aviso de parada: espera um instante e envia.
+          Future<void>.delayed(const Duration(milliseconds: 450), finish);
+          return;
+        }
         // Conversa contínua: ninguém falou, então abre de novo. Depois de um minuto de silêncio ela para de ouvir.
-        if (was && _handsFree && !_caught) {
+        if (was && _handsFree) {
           if (++_silences >= 12) {
             _handsFree = false;
+            _tellState();
             Link.send(Link.floating, {'type': 'reply', 'text': 'Parei de ouvir. Toca no microfone quando quiser falar.'});
           } else {
             _relisten();
@@ -565,6 +581,7 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       Link.send(Link.floating, {'type': 'reply', 'text': problem});
     }
   }
+
 
   void _notice(String text) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(text, style: const TextStyle(fontFamily: Look.mono)), backgroundColor: Look.panel));
