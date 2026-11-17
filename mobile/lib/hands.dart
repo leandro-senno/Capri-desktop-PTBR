@@ -1061,7 +1061,7 @@ class Hands {
   );
   static final RegExp _no = RegExp(r'^(?:n[aã]o|n|cancela|deixa|esquece|nada)\b', caseSensitive: false);
 
-  static Future<Map<dynamic, dynamic>?> _message(String? who) async {
+  static Future<Map<dynamic, dynamic>?> _messageFrom(String? who) async {
     List<dynamic> found;
     try {
       found = await _channel.invokeMethod<List<dynamic>>('notices') ?? const [];
@@ -1099,7 +1099,7 @@ class Hands {
     if (store?.readMessages != true) return null;
     final ask = _reply.firstMatch(text);
     if (ask == null) return null;
-    final target = await _message(ask.group(1));
+    final target = await _messageFrom(ask.group(1));
     if (target == null) return null; // "responde a pergunta": não é sobre mensagem, deixa o cérebro responder
     final who = '${target['title']}';
     final base = {'key': '${target['key']}', 'title': who};

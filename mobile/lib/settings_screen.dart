@@ -228,8 +228,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
       const Text('Assistente padrão (botão lateral)', style: TextStyle(fontSize: 15)),
       const SizedBox(height: 4),
       const Text(
-        '1. Toque em "Escolher assistente" e, em "App de assistente digital", escolha a Capri.
-'
+        '1. Toque em "Escolher assistente" e, em "App de assistente digital", escolha a Capri.\n'
         '2. No Galaxy, vá em Configurações > Recursos avançados > Botão lateral > Pressionar e manter, e escolha "Assistente digital".',
         style: TextStyle(color: Look.dim, fontSize: 12, height: 1.5),
       ),
@@ -239,8 +238,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
       const Text('Atalho e widget', style: TextStyle(fontSize: 15)),
       const SizedBox(height: 4),
       const Text(
-        'Atalho: abra a cortina, toque no lápis (editar) e arraste o botão "Capri" para os botões rápidos. Ele solta ou guarda a janela flutuante.
-'
+        'Atalho: abra a cortina, toque no lápis (editar) e arraste o botão "Capri" para os botões rápidos. Ele solta ou guarda a janela flutuante.\n'
         'Widget: segure um espaço vazio da tela inicial, toque em Widgets e procure "Capri". Um toque nela abre a conversa.',
         style: TextStyle(color: Look.dim, fontSize: 12, height: 1.5),
       ),
@@ -265,8 +263,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
       ),
       const SizedBox(height: 10),
       const Text(
-        'Modo jogo: diga "modo jogo" e ela flutua e passa a assistir e comentar a cada 3 minutos. "Desliga o modo jogo" volta como estava.
-'
+        'Modo jogo: diga "modo jogo" e ela flutua e passa a assistir e comentar a cada 3 minutos. "Desliga o modo jogo" volta como estava.\n'
         'Agenda: "o que tenho amanhã?", "minha agenda da semana", "marca dentista sexta às 15h" (ela deixa pronto e você salva).',
         style: TextStyle(color: Look.dim, fontSize: 12, height: 1.5),
       ),
