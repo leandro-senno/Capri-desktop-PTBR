@@ -178,7 +178,6 @@ class Voice {
   final SpeechToText _ears = SpeechToText();
   final AudioPlayer _player = AudioPlayer();
   final AudioPlayer _speech = AudioPlayer();
-  StreamSubscription<void>? _finished;
   bool _earsReady = false;
   bool _ttsReady = false;
   int _ticket = 0;
@@ -214,10 +213,8 @@ class Voice {
       await _tts.setLanguage('pt-BR');
       await _tts.setSpeechRate(0.52);
       await _tts.setPitch(1.25);
-      _tts.setStartHandler(() => onStart?.call());
-      _tts.setCompletionHandler(() => onDone?.call());
-      _tts.setCancelHandler(() => onDone?.call());
-      _tts.setErrorHandler((_) => onDone?.call());
+      // Cada frase espera terminar antes da próxima; o fim da fala inteira é avisado pela fila.
+      await _tts.awaitSpeakCompletion(true);
     } catch (_) {
       // sem voz instalada: ela só escreve
     }
@@ -226,42 +223,124 @@ class Voice {
   /// Tags de glitch como [SIGNAL CORRUPTED] aparecem no texto mas não são lidas, como no original.
   static String spoken(String text) => text.replaceAll(RegExp(r'\[[^\]]*\]'), ' ').replaceAll(RegExp(r'\s+'), ' ').trim();
 
+  // ------------------------------------------------------------ fala em fila
+  // As frases entram com add() assim que o cérebro termina cada uma, e saem uma depois da outra.
+  // Com a ElevenLabs, o áudio de cada frase já é pedido na hora em que ela entra na fila.
+
+  final List<Future<_Piece?>> _queue = [];
+  bool _pumping = false;
+  bool _closed = true;
+  bool _talking = false;
+  int _finishedTicket = -1;
+  Completer<void> _hush = Completer<void>();
+  final StringBuffer _said = StringBuffer();
+
+  /// Está falando (ou com frases na fila).
+  bool get talking => _talking || _queue.isNotEmpty;
+
+  /// Começa uma fala nova, que vai receber frases com [add] e termina com [end].
+  void begin() {
+    _ticket++;
+    _queue.clear();
+    _closed = false;
+    _talking = false;
+    _said.clear();
+    if (_hush.isCompleted) _hush = Completer<void>();
+  }
+
+  /// Junta uma frase à fala atual.
+  void add(String sentence) {
+    final words = spoken(sentence);
+    if (words.isEmpty || _closed) return;
+    _said.write(' $words');
+    _queue.add(_fetch(words, _ticket));
+    _pump();
+  }
+
+  /// Não vêm mais frases: quando a fila acabar, avisa [onDone].
+  void end() {
+    _closed = true;
+    if (!_pumping && _queue.isEmpty) _finish();
+  }
+
+  /// Fala um texto inteiro de uma vez.
   Future<void> speak(String text) async {
-    final words = spoken(text);
-    final ticket = ++_ticket;
-    if (words.isEmpty) {
-      onDone?.call();
-      return;
+    await stop(quietly: true);
+    begin();
+    add(text);
+    end();
+  }
+
+  Future<_Piece?> _fetch(String words, int ticket) async {
+    if (!elevenReady) return _Piece(words, null);
+    try {
+      final wav = await Eleven.speak(key: elevenKey!, voiceId: voiceId!, model: voiceModel, text: words);
+      return _Piece(words, wav);
+    } on VoiceException catch (error) {
+      if (ticket == _ticket) onProblem?.call(error.message);
+    } catch (_) {
+      if (ticket == _ticket) onProblem?.call('Não consegui tocar a voz da ElevenLabs. Usei a voz do Android.');
     }
-    await _quiet();
-    if (elevenReady) {
+    return _Piece(words, null);
+  }
+
+  Future<void> _pump() async {
+    if (_pumping) return;
+    _pumping = true;
+    while (_queue.isNotEmpty) {
+      final ticket = _ticket;
+      final piece = await _queue.removeAt(0);
+      if (ticket != _ticket || piece == null) continue;
+      await _play(piece);
+    }
+    _pumping = false;
+    if (_closed) _finish();
+  }
+
+  Future<void> _play(_Piece piece) async {
+    if (!_talking) {
+      _talking = true;
+      onStart?.call();
+    }
+    final hush = _hush.future;
+    final wav = piece.wav;
+    if (wav != null) {
+      onShapes?.call(Eleven.mouths(wav, 12));
+      final done = Completer<void>();
+      final listening = _speech.onPlayerComplete.listen((_) {
+        if (!done.isCompleted) done.complete();
+      });
       try {
-        final wav = await Eleven.speak(key: elevenKey!, voiceId: voiceId!, model: voiceModel, text: words);
-        if (ticket != _ticket) return; // outra fala começou enquanto esta baixava
-        _finished ??= _speech.onPlayerComplete.listen((_) => onDone?.call());
-        onShapes?.call(Eleven.mouths(wav, 12));
         await _speech.setVolume(volume);
         await _speech.play(BytesSource(wav, mimeType: 'audio/wav'));
-        onStart?.call();
-        return;
-      } on VoiceException catch (error) {
-        onProblem?.call(error.message);
+        await Future.any([done.future, hush]).timeout(const Duration(seconds: 60));
       } catch (_) {
-        onProblem?.call('Não consegui tocar a voz da ElevenLabs. Usei a voz do Android.');
+        // áudio que não tocou: segue para a próxima frase
+      } finally {
+        await listening.cancel();
       }
-      if (ticket != _ticket) return;
+      return;
     }
     await _prepare();
     try {
       await _tts.setLanguage(_speakIn[language] ?? 'pt-BR');
       await _tts.setVolume(volume);
-      await _tts.speak(words);
+      final talk = _tts.speak(piece.words);
+      await Future.any([talk, hush]).timeout(Duration(milliseconds: 5000 + piece.words.length * 120));
     } catch (_) {
-      onDone?.call();
+      // voz do sistema travou ou demorou: segue
     }
   }
 
+  void _finish() {
+    if (_finishedTicket == _ticket) return;
+    _finishedTicket = _ticket;
+    _talking = false;
+    onDone?.call();
+  }
+
   Future<void> _quiet() async {
+    if (!_hush.isCompleted) _hush.complete();
     try {
       await _speech.stop();
     } catch (_) {}
@@ -270,10 +349,41 @@ class Voice {
     } catch (_) {}
   }
 
-  Future<void> stop() async {
+  /// Para de falar na hora. Com [quietly], não avisa [onDone] (uma fala nova vai começar em seguida).
+  Future<void> stop({bool quietly = false}) async {
     _ticket++;
+    _queue.clear();
+    _closed = true;
     await _quiet();
-    onDone?.call();
+    _hush = Completer<void>();
+    _finishedTicket = _ticket;
+    _talking = false;
+    if (!quietly) onDone?.call();
+  }
+
+  static String _fold(String text) {
+    const from = 'áàâãäéèêëíìîïóòôõöúùûüç';
+    const to = 'aaaaaeeeeiiiiooooouuuuc';
+    final buffer = StringBuffer();
+    for (final rune in text.toLowerCase().runes) {
+      final letter = String.fromCharCode(rune);
+      final at = from.indexOf(letter);
+      buffer.write(at >= 0 ? to[at] : letter);
+    }
+    return buffer.toString().replaceAll(RegExp(r'[^a-z0-9 ]'), ' ');
+  }
+
+  static const Set<String> _halt = {'para', 'pare', 'espera', 'pera', 'perai', 'chega', 'calma', 'capri', 'stop', 'silencio', 'cala'};
+
+  /// O microfone ouviu a própria voz dela (eco) ou foi você falando por cima?
+  /// É eco quando quase todas as palavras ouvidas estão no que ela está dizendo.
+  bool isEcho(String heard) {
+    final mine = _fold(_said.toString()).split(' ').where((word) => word.length >= 2).toSet();
+    final theirs = _fold(heard).split(' ').where((word) => word.length >= 2).toList();
+    if (theirs.any((word) => _halt.contains(word) && !mine.contains(word))) return false;
+    if (theirs.length < 3) return true;
+    final strange = theirs.where((word) => !mine.contains(word)).length;
+    return strange / theirs.length < 0.5;
   }
 
   /// Toca um dos cumprimentos gravados do original (hello-morning, hello-late, hello-miss).
@@ -291,7 +401,8 @@ class Voice {
   /// então o aviso fica aqui e é trocado a cada escuta, para nunca chegar a uma escuta antiga.
   void Function()? _stopped;
 
-  Future<bool> listen({required void Function(String words, bool done) onWords, required void Function() onStop}) async {
+  /// Com [keepTalking], ouve sem parar a fala dela (para você poder interromper).
+  Future<bool> listen({required void Function(String words, bool done) onWords, required void Function() onStop, bool keepTalking = false}) async {
     try {
       if (!_earsReady) {
         _earsReady = await _ears.initialize(
@@ -302,7 +413,7 @@ class Voice {
         );
       }
       if (!_earsReady) return false;
-      await stop();
+      if (!keepTalking) await stop();
       _stopped = onStop;
       await _ears.listen(
         onResult: (SpeechRecognitionResult result) => onWords(result.recognizedWords, result.finalResult),
@@ -325,9 +436,14 @@ class Voice {
   }
 
   void dispose() {
-    _finished?.cancel();
     _player.dispose();
     _speech.dispose();
     _tts.stop();
   }
+}
+
+class _Piece {
+  final String words;
+  final Uint8List? wav;
+  const _Piece(this.words, this.wav);
 }

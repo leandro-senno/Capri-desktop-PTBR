@@ -19,6 +19,13 @@ class LocalBrain {
 
   dynamic _model;
   bool? _loadedGpu;
+
+  // Uma resposta por vez: o motor não aceita duas sessões ao mesmo tempo.
+  Future<void> _turn = Future<void>.value();
+  bool _cancelled = false;
+
+  /// Para a resposta em andamento (a pessoa interrompeu).
+  void cancel() => _cancelled = true;
   bool _vision = false;
 
   /// true depois que abrir uma imagem falhou neste aparelho: ela passa a usar só texto.
@@ -97,7 +104,15 @@ class LocalBrain {
 
   /// Responde a uma fala. Cada chamada é uma sessão nova: quem chama manda no [system] tudo que o modelo
   /// precisa saber, inclusive a conversa recente. Assim a memória não depende do estado interno do motor.
-  Future<String> ask({required String system, required String said, required int limit, required bool gpu, Uint8List? image}) async {
+  Future<String> ask({required String system, required String said, required int limit, required bool gpu, Uint8List? image, void Function(String piece)? onToken}) {
+    final previous = _turn;
+    final done = Completer<void>();
+    _turn = done.future;
+    return previous.then((_) => _answer(system, said, limit, gpu, image, onToken)).whenComplete(done.complete);
+  }
+
+  Future<String> _answer(String system, String said, int limit, bool gpu, Uint8List? image, void Function(String piece)? onToken) async {
+    _cancelled = false;
     await load(gpu: gpu, vision: image != null);
     final chat = image == null
         ? await _model.createChat(systemInstruction: system, maxOutputTokens: limit)
@@ -107,7 +122,18 @@ class LocalBrain {
       final reply = StringBuffer();
       final Stream<dynamic> stream = chat.generateChatResponseAsync();
       await for (final event in stream.timeout(const Duration(seconds: 120))) {
-        if (event is TextResponse) reply.write(event.token);
+        if (_cancelled) {
+          try {
+            await chat.stopGeneration();
+          } catch (_) {
+            // versões do motor sem stopGeneration(): sair do laço já descarta o resto
+          }
+          break;
+        }
+        if (event is TextResponse) {
+          reply.write(event.token);
+          onToken?.call(event.token);
+        }
       }
       return reply.toString();
     } finally {

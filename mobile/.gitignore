@@ -12,6 +12,7 @@ pubspec.lock
 !/android/app/
 /android/app/*
 !/android/app/src/
+!/android/app/proguard-rules.pro
 /android/app/src/*
 !/android/app/src/main/
 /android/app/src/main/*
@@ -20,3 +21,12 @@ pubspec.lock
 !/android/app/src/main/kotlin/
 /android/app/src/main/res/*
 !/android/app/src/main/res/mipmap-*/
+!/android/app/src/main/res/xml/
+!/android/app/src/main/res/values/
+/android/app/src/main/res/values/*
+!/android/app/src/main/res/values/capri_strings.xml
+!/android/app/src/main/res/layout/
+!/android/app/src/main/res/drawable-nodpi/
+!/android/app/src/main/res/drawable/
+/android/app/src/main/res/drawable/*
+!/android/app/src/main/res/drawable/ic_capri_tile.xml

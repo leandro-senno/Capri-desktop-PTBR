@@ -15,6 +15,66 @@ class BrainException implements Exception {
   String toString() => message;
 }
 
+/// Recebe a resposta aos pedaços, enquanto o cérebro ainda gera, e entrega frase por frase,
+/// para ela começar a falar a primeira enquanto pensa no resto.
+class Sentences {
+  final void Function(String sentence) emit;
+  Sentences(this.emit);
+
+  final StringBuffer _buffer = StringBuffer();
+  bool _first = true;
+  bool _halted = false;
+
+  // Fim de frase: pontuação seguida de espaço, ou quebra de linha.
+  static final RegExp _end = RegExp(r'[.!?…]+["”’)\]]*\s+|\n+');
+
+  void add(String piece) {
+    if (_halted) return;
+    _buffer.write(piece);
+    var text = _buffer.toString();
+    // Alguns modelos pensam em voz alta entre <think> e </think>: isso nunca é falado.
+    final closed = text.indexOf('</think>');
+    if (closed >= 0) {
+      text = text.substring(closed + 8);
+    } else if (text.contains('<think>')) {
+      return;
+    }
+    var cut = 0;
+    for (final match in _end.allMatches(text)) {
+      final sentence = text.substring(cut, match.end);
+      // Frase curta demais ("Oi."): junta com a próxima, para a voz não sair picotada.
+      if (sentence.trim().length < 14) continue;
+      _out(sentence);
+      cut = match.end;
+      if (_halted) return;
+    }
+    _buffer
+      ..clear()
+      ..write(text.substring(cut));
+  }
+
+  void close() {
+    if (_halted) return;
+    final rest = _buffer.toString();
+    _buffer.clear();
+    if (!rest.contains('<think>') || rest.contains('</think>')) _out(rest.contains('</think>') ? rest.substring(rest.indexOf('</think>') + 8) : rest);
+  }
+
+  void _out(String raw) {
+    var sentence = raw.replaceAll('*', '').replaceAll(RegExp(r'\[(?:Right now|Background)[^\]]*\]', caseSensitive: false), '');
+    if (_first) sentence = sentence.replaceFirst(RegExp(r'^\s*(?:capri|you|assistant|model)\s*[:>\-–—]+\s*', caseSensitive: false), '');
+    // Se o modelo inventar a fala seguinte da pessoa, para de falar ali.
+    if (RegExp(r'^\s*(?:they|user|usu[aá]rio)\s*:', caseSensitive: false).hasMatch(sentence)) {
+      _halted = true;
+      return;
+    }
+    sentence = sentence.trim();
+    if (sentence.isEmpty) return;
+    _first = false;
+    emit(sentence);
+  }
+}
+
 /// O cérebro por chave, portado de app/Brain.cs: a chave diz qual é o provedor.
 class Brain {
   static const String nvidia = 'https://integrate.api.nvidia.com';
@@ -127,9 +187,11 @@ class Brain {
     }
   }
 
+  /// Para a resposta em andamento (quando a pessoa interrompe): fecha a conexão ou para o modelo local.
   void cancel() {
     _active?.close();
     _active = null;
+    device.cancel();
   }
 
   static String _explain(int status, String kind) {
@@ -232,8 +294,13 @@ class Brain {
   /// [note] é uma instrução extra só para esta resposta (por exemplo, o resultado de algo que ela acabou de fazer).
   /// Com [hidden], a fala não é da pessoa (é um empurrão do app) e não entra na memória da conversa.
   /// [image] é uma foto da tela em JPEG para ela olhar junto com a fala.
-  Future<String> ask(String said, {String? note, bool hidden = false, Uint8List? image}) =>
-      local ? _askLocal(said, note, hidden, image) : _askCloud(said, note, hidden, image);
+  /// [onSentence] recebe cada frase assim que fica pronta, antes da resposta inteira (para falar enquanto pensa).
+  Future<String> ask(String said, {String? note, bool hidden = false, Uint8List? image, void Function(String sentence)? onSentence}) async {
+    final splitter = onSentence == null ? null : Sentences(onSentence);
+    final reply = local ? await _askLocal(said, note, hidden, image, splitter) : await _askCloud(said, note, hidden, image, splitter);
+    splitter?.close();
+    return reply;
+  }
 
   /// Idioma das respostas: pt, en ou es.
   String language = 'pt';
@@ -311,14 +378,14 @@ class Brain {
     return '\n\nThe conversation so far, oldest first:\n$lines\n\nTheir next message continues this conversation. If you just asked or offered something, their message is the answer to it. Reply with your words only.';
   }
 
-  Future<String> _local(String system, String said, int limit, [Uint8List? image]) async {
+  Future<String> _local(String system, String said, int limit, [Uint8List? image, void Function(String piece)? onToken]) async {
     if (!localReady) throw BrainException(offline);
     final guarded = gpu && device.onGpu == null;
     try {
       if (guarded) await gpuGuard?.call(true);
       if (image != null && !device.blind) {
         try {
-          return await device.ask(system: system, said: said, limit: limit, gpu: gpu, image: image);
+          return await device.ask(system: system, said: said, limit: limit, gpu: gpu, image: image, onToken: onToken);
         } on TimeoutException {
           rethrow;
         } catch (_) {
@@ -327,7 +394,7 @@ class Brain {
           await device.unload();
         }
       }
-      return await device.ask(system: system, said: said, limit: limit, gpu: gpu);
+      return await device.ask(system: system, said: said, limit: limit, gpu: gpu, onToken: onToken);
     } on TimeoutException {
       throw BrainException('Demorei demais pensando. Tente de novo, ou use uma chave nas configurações.');
     } catch (error) {
@@ -339,9 +406,9 @@ class Brain {
     }
   }
 
-  Future<String> _askLocal(String said, String? note, bool hidden, Uint8List? image) async {
+  Future<String> _askLocal(String said, String? note, bool hidden, Uint8List? image, Sentences? splitter) async {
     final limit = [160, 300, 600][wordiness.clamp(0, 2).toInt()];
-    final reply = _clean(await _local(_system(note) + _transcript(), _stamp(said), limit, image));
+    final reply = _clean(await _local(_system(note) + _transcript(), _stamp(said), limit, image, splitter?.add));
     if (reply.isEmpty) return declined;
     if (!hidden) _history.add({'role': 'user', 'content': said});
     _history.add({'role': 'assistant', 'content': reply});
@@ -422,7 +489,7 @@ class Brain {
     return content is String ? content : '';
   }
 
-  Future<String> _askCloud(String said, String? note, bool hidden, Uint8List? image) async {
+  Future<String> _askCloud(String said, String? note, bool hidden, Uint8List? image, Sentences? splitter) async {
     final kind = this.kind;
     final key = this.key;
     final model = this.model;
@@ -467,7 +534,6 @@ class Brain {
           {'role': 'system', 'content': system},
           ...turns,
         ],
-        'stream': false,
       };
       // Os modelos novos da OpenAI recusam max_tokens e temperature; os outros aceitam.
       if (kind != 'openai') {
@@ -476,50 +542,15 @@ class Brain {
       }
     }
 
-    final client = http.Client();
-    _active = client;
-    final http.Response response;
+    String reply;
     try {
-      response = await client.post(address, headers: _headers(kind, key), body: jsonEncode(body)).timeout(const Duration(seconds: 60));
+      reply = await _stream(address, _headers(kind, key), body, kind, (piece) => splitter?.add(piece));
     } on TimeoutException {
       throw BrainException('Ainda pensando... a ${companyOf(kind)} demorou demais. Tente de novo.');
+    } on _HttpFail catch (fail) {
+      throw BrainException(_explain(fail.status, kind));
     } on http.ClientException {
       throw BrainException('Sem conexão com a ${companyOf(kind)}. Confira a internet.');
-    } finally {
-      if (identical(_active, client)) _active = null;
-      client.close();
-    }
-
-    if (response.statusCode != 200) {
-      throw BrainException(_explain(response.statusCode, kind));
-    }
-
-    String reply = '';
-    try {
-      final decoded = jsonDecode(utf8.decode(response.bodyBytes));
-      if (kind == 'anthropic') {
-        final content = decoded['content'];
-        if (content is List) {
-          for (final part in content) {
-            if (part is Map && part['type'] == 'text' && part['text'] is String) reply += part['text'] as String;
-          }
-        }
-      } else {
-        final choices = decoded['choices'];
-        if (choices is List && choices.isNotEmpty) {
-          final message = choices.first['message'];
-          final content = message is Map ? message['content'] : null;
-          if (content is String) {
-            reply = content;
-          } else if (content is List) {
-            for (final part in content) {
-              if (part is Map && part['text'] is String) reply += part['text'] as String;
-            }
-          }
-        }
-      }
-    } on FormatException {
-      reply = '';
     }
 
     reply = _clean(reply);
@@ -531,4 +562,57 @@ class Brain {
     _trim();
     return reply;
   }
+
+  /// Pede a resposta em pedaços (stream) e repassa cada pedaço assim que chega. Devolve o texto inteiro.
+  Future<String> _stream(Uri address, Map<String, String> headers, Map<String, Object?> body, String kind, void Function(String piece) onPiece) async {
+    final client = http.Client();
+    _active = client;
+    try {
+      final request = http.Request('POST', address)
+        ..headers.addAll(headers)
+        ..body = jsonEncode({...body, 'stream': true});
+      final response = await client.send(request).timeout(const Duration(seconds: 60));
+      if (response.statusCode != 200) {
+        await response.stream.drain<void>();
+        throw _HttpFail(response.statusCode);
+      }
+      final full = StringBuffer();
+      final lines = response.stream.transform(utf8.decoder).transform(const LineSplitter()).timeout(const Duration(seconds: 60));
+      await for (final line in lines) {
+        if (!line.startsWith('data:')) continue;
+        final data = line.substring(5).trim();
+        if (data == '[DONE]') break;
+        Object? json;
+        try {
+          json = jsonDecode(data);
+        } on FormatException {
+          continue;
+        }
+        if (json is! Map) continue;
+        var piece = '';
+        if (kind == 'anthropic') {
+          final delta = json['delta'];
+          if (json['type'] == 'content_block_delta' && delta is Map && delta['text'] is String) piece = delta['text'] as String;
+        } else {
+          final choices = json['choices'];
+          if (choices is List && choices.isNotEmpty && choices.first is Map) {
+            final delta = (choices.first as Map)['delta'];
+            if (delta is Map && delta['content'] is String) piece = delta['content'] as String;
+          }
+        }
+        if (piece.isEmpty) continue;
+        full.write(piece);
+        onPiece(piece);
+      }
+      return full.toString();
+    } finally {
+      if (identical(_active, client)) _active = null;
+      client.close();
+    }
+  }
+}
+
+class _HttpFail implements Exception {
+  final int status;
+  _HttpFail(this.status);
 }

@@ -56,6 +56,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   bool _stopTask = false;
   DateTime? _lastGlance;
 
+  // Interromper: enquanto ela fala, o microfone ouve para você poder falar por cima.
+  bool _barging = false;
+  // Palavra de ativação: o que já foi pedido ao lado nativo (segurar ou soltar o microfone).
+  bool? _wakeHeld;
+  // O que fazer quando ela terminar de falar (a música do bom dia, ouvir a resposta de uma mensagem).
+  Future<void> Function()? _afterSpeech;
+  bool _listenOnce = false;
+
   bool _handsFree = false;
   bool _caught = false;
   int _silences = 0;
@@ -80,17 +88,23 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     _brain.remember(_lines.map((line) => MapEntry(line.mine, line.text)));
     _voice.onStart = () {
       _speaking = true;
+      // Ela começa a falar enquanto ainda pensa no resto: sai do glitch de "pensando" para a boca aparecer.
+      _capri.thinking = false;
       _capri.talking = true;
       Link.send(Link.floating, {'type': 'talking', 'on': true});
       if (mounted) setState(() {});
+      _syncWake();
+      _startBarge();
     };
     _voice.onDone = () {
       _speaking = false;
       _capri.talking = false;
       Link.send(Link.floating, {'type': 'talking', 'on': false});
       if (mounted) setState(() {});
-      _relisten();
+      _spoken();
     };
+    // Aberturas pelo widget, atalho, assistente ou ao ligar, e a palavra de ativação, com o app aberto.
+    Hands.listen(onLaunch: _launched, onWake: _woken);
     // Rolar a tela desviando da janela flutuante: arrasta do lado em que ela não está.
     Hands.swipeAt = () async {
       if (!await FlutterOverlayWindow.isActive()) return 0.5;
@@ -135,8 +149,18 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     };
     _capri.addListener(_moodChanged);
     _wander = Timer.periodic(const Duration(seconds: 9), (_) => _roam());
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      _greet();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      // Palavra de ativação: com o app visível agora, liga o ouvido em segundo plano.
+      if (_store.wake) {
+        await Hands.wakeSet(true);
+        await Hands.ear(true);
+      }
+      final why = await Hands.launchReason();
+      if (why != null) {
+        _launched(why);
+      } else {
+        _greet();
+      }
       if (_store.gpuTrying) {
         // O app fechou enquanto carregava o cérebro na placa de vídeo: da próxima vez usa o processador.
         _store.localGpu = false;
@@ -237,9 +261,9 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       _foreground = true;
       _lastActivity = DateTime.now();
     } else if (state == AppLifecycleState.paused) {
-      // A voz continua: ela pode estar respondendo pela janela flutuante.
+      // A voz e o microfone continuam se ela estiver flutuando: a conversa segue por lá.
       _foreground = false;
-      _voice.stopListening();
+      _pausedListening();
     }
   }
 
@@ -269,10 +293,24 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     });
   }
 
-  /// Chegou uma notificação: se for mensagem e o aviso estiver ligado, ela conta de quem é.
-  /// O texto da mensagem não é lido em voz alta nem enviado ao cérebro; para isso a pessoa pede.
+  Future<void> _pausedListening() async {
+    var floating = false;
+    try {
+      floating = await FlutterOverlayWindow.isActive();
+    } catch (_) {}
+    if (floating || _foreground) return;
+    _handsFree = false;
+    await _stopBarge();
+    await _voice.stopListening();
+    if (mounted) setState(() => _listening = false);
+    _syncWake();
+  }
+
+  /// Chegou uma notificação de mensagem. Com "ler e responder" ligado, ela lê a mensagem em voz alta
+  /// (direto, sem passar pelo cérebro) e oferece responder. Só com o aviso ligado, diz de quem é.
   void _noticed(dynamic item) {
-    if (!mounted || !_store.announce || item is! Map || item['message'] != true) return;
+    if (!mounted || item is! Map || item['message'] != true) return;
+    if (!_store.announce && !_store.readMessages) return;
     if (_thinking || _speaking || _listening) return;
     final now = DateTime.now();
     final last = _lastNotice;
@@ -281,12 +319,178 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
     final title = (item['title'] as String?) ?? '';
     final app = (item['app'] as String?) ?? '';
     _capri.poke();
+    if (_store.readMessages) {
+      final text = (item['text'] as String?) ?? '';
+      final reply = item['canReply'] == true;
+      Hands.lastMessage = item;
+      if (reply) _listenOnce = true; // abre o microfone uma vez para você dizer o que responder
+      _say(Line(false, '${title.isEmpty ? 'Mensagem' : 'Mensagem de $title'} no $app: “$text”.${reply ? ' Quer responder?' : ''}'));
+      return;
+    }
     _say(Line(false, title.isEmpty ? 'Chegou mensagem no $app.' : 'Chegou mensagem de $title no $app.'));
+  }
+
+  // ------------------------------------------------------------ falar, interromper, palavra de ativação
+
+  /// Ela terminou de falar (ou foi interrompida sem querer continuar).
+  Future<void> _spoken() async {
+    await _stopBarge();
+    final after = _afterSpeech;
+    _afterSpeech = null;
+    if (after != null) {
+      try {
+        await after();
+      } catch (_) {}
+    }
+    if (_listenOnce && !_handsFree) {
+      _listenOnce = false;
+      if (_foreground || await Hands.earOn()) await _listen();
+    }
+    _listenOnce = false;
+    _relisten();
+    _syncWake();
+  }
+
+  /// Enquanto ela fala numa conversa por voz, deixa o microfone ouvindo para você poder interromper.
+  /// O que o microfone pega da própria voz dela é ignorado (comparando com o que ela está dizendo).
+  Future<void> _startBarge() async {
+    if (!_store.interrupt || !_store.voice || !_handsFree || _barging || _listening || !_speaking) return;
+    _barging = true;
+    await _holdWake(true);
+    final started = await _voice.listen(
+      keepTalking: true,
+      onWords: (words, done) {
+        if (!_barging || !_speaking || words.trim().isEmpty) return;
+        if (_voice.isEcho(words)) return;
+        _interrupt();
+      },
+      onStop: () {
+        if (!_barging) return;
+        _barging = false;
+        // A escuta acabou mas ela ainda fala: abre de novo.
+        if (_speaking) Future<void>.delayed(const Duration(milliseconds: 300), _startBarge);
+      },
+    );
+    if (!started) _barging = false;
+  }
+
+  Future<void> _stopBarge() async {
+    if (!_barging) return;
+    _barging = false;
+    await _voice.stopListening();
+  }
+
+  /// Você falou por cima (ou tocou no microfone enquanto ela falava): ela para e ouve.
+  Future<void> _interrupt() async {
+    _barging = false;
+    _ticket++; // descarta a resposta que ainda estava sendo pensada
+    _brain.cancel();
+    _afterSpeech = null;
+    _listenOnce = false;
+    if (_thinking) _busy(false);
+    await _voice.stopListening();
+    await _voice.stop(quietly: true);
+    _speaking = false;
+    _capri.talking = false;
+    Link.send(Link.floating, {'type': 'talking', 'on': false});
+    if (mounted) setState(() {});
+    _handsFree = _store.continuous;
+    _silences = 0;
+    await _listen();
+  }
+
+  /// Segura ou solta o microfone da palavra de ativação (o app precisa dele para conversar).
+  Future<void> _holdWake(bool hold) async {
+    if (!_store.wake || _wakeHeld == hold) return;
+    _wakeHeld = hold;
+    await Hands.wakeHold(hold);
+    // Dá tempo ao ouvido offline de soltar o microfone antes do reconhecimento de fala começar.
+    if (hold) await Future<void>.delayed(const Duration(milliseconds: 250));
+  }
+
+  void _syncWake() {
+    if (!_store.wake) return;
+    _holdWake(_listening || _speaking || _thinking || _handsFree || _barging);
+  }
+
+  /// Ouviu "Capri" com o app aberto (na frente ou atrás).
+  Future<void> _woken() async {
+    _wakeHeld = true; // o ouvido offline já soltou o microfone ao ouvir
+    if (!mounted) return;
+    if (_listening) return;
+    if (_speaking) {
+      await _interrupt();
+      return;
+    }
+    _handsFree = _store.continuous;
+    _silences = 0;
+    if (_foreground) {
+      await _listen();
+      return;
+    }
+    var floating = false;
+    try {
+      floating = await FlutterOverlayWindow.isActive();
+    } catch (_) {}
+    if (floating) {
+      _openBubble();
+      await _listen();
+      return;
+    }
+    // Sem ela flutuando, abre o app por cima para poder soltar a janela flutuante.
+    if (!await Hands.summon('listen')) {
+      _handsFree = false;
+      _wakeHeld = null;
+      _syncWake();
+    }
+  }
+
+  /// O app foi aberto por um atalho: 'listen' (widget, assistente, palavra de ativação),
+  /// 'toggle' (configurações rápidas) ou 'float' (ao ligar o celular).
+  Future<void> _launched(String why) async {
+    if (!mounted) return;
+    switch (why) {
+      case 'toggle':
+        var floating = false;
+        try {
+          floating = await FlutterOverlayWindow.isActive();
+        } catch (_) {}
+        if (floating) {
+          await _hideFloating();
+        } else if (!await _showFloating(quiet: true)) {
+          return; // sem permissão: fica no app, que já explicou
+        }
+        await Hands.hide();
+      case 'float':
+        if (await _showFloating(quiet: true)) await Hands.hide();
+      case 'listen':
+        _handsFree = _store.continuous;
+        _silences = 0;
+        if (_speaking) await _voice.stop(quietly: true);
+        if (!await _showFloating(quiet: true)) {
+          // Sem permissão de flutuar: conversa aqui no app mesmo.
+          await _listen();
+          return;
+        }
+        _openBubble();
+        await Hands.hide();
+        await Future<void>.delayed(const Duration(milliseconds: 400));
+        await _listen();
+    }
+  }
+
+  /// Abre o balão de conversa da janela flutuante (tenta por alguns segundos, enquanto ela aparece).
+  Future<void> _openBubble() async {
+    for (var i = 0; i < 15; i++) {
+      if (Link.send(Link.floating, {'type': 'open'})) return;
+      await Future<void>.delayed(const Duration(milliseconds: 300));
+    }
   }
 
   /// Conta para a janela flutuante como estão o microfone, a voz e a conversa contínua.
   void _tellState() {
     Link.send(Link.floating, {'type': 'state', 'voice': _store.voice, 'continuous': _store.continuous, 'listening': _listening});
+    _syncWake();
   }
 
   /// Modo silencioso: ela continua respondendo por escrito, sem falar.
@@ -317,21 +521,27 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   void _busy(bool value) {
-    _capri.thinking = value;
+    _capri.thinking = value && !_speaking;
     if (mounted) setState(() => _thinking = value);
     if (value) Link.send(Link.floating, {'type': 'thinking'});
+    _syncWake();
   }
 
   /// Mostra a fala dela aqui e na janela flutuante, e fala em voz alta se a voz estiver ligada.
-  void _say(Line line) {
+  /// Com [streamed], a fala já começou frase por frase enquanto ela pensava: só falta fechar a fila.
+  void _say(Line line, {bool streamed = false}) {
     _add(line);
     Link.send(Link.floating, {'type': 'reply', 'text': line.text});
+    if (streamed) {
+      _voice.end(); // ao terminar de falar, a voz chama _spoken
+      return;
+    }
     if (!line.problem && _store.voice) {
-      _voice.speak(line.text); // ao terminar de falar, a voz chama _relisten
+      _voice.speak(line.text);
       return;
     }
     if (!line.problem) _capri.grin();
-    _relisten();
+    _spoken();
   }
 
   Future<void> _send([String? heard]) async {
@@ -346,6 +556,17 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
 
     final ticket = ++_ticket;
     _busy(true);
+    // Falar enquanto pensa: cada frase pronta já entra na fila da voz.
+    var streamed = false;
+    void sentence(String text) {
+      if (!_store.voice || ticket != _ticket) return;
+      if (!streamed) {
+        streamed = true;
+        _voice.begin();
+      }
+      _voice.add(text);
+    }
+
     try {
       // Primeiro as mãos: abrir app ou link, tocar música, pesquisar. Depois ela comenta o que fez.
       var deed = await Hands.handle(said);
@@ -371,10 +592,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
       var problem = false;
       if (deed != null) {
         reply = deed.line;
+        _afterSpeech = deed.after;
+        if (deed.effect == 'float') await _showFloating(quiet: true);
         if (deed.think && _brain.ready) {
           try {
-            reply = await _brain.ask(said, note: deed.note, image: deed.image);
+            reply = await _brain.ask(said, note: deed.note, image: deed.image, onSentence: sentence);
           } catch (_) {
+            if (streamed) await _voice.stop(quietly: true);
+            streamed = false;
             reply = deed.line;
           }
         }
@@ -382,17 +607,19 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         reply = Brain.offline;
         problem = true;
       } else {
-        reply = await _brain.ask(said);
+        reply = await _brain.ask(said, onSentence: sentence);
       }
       if (!mounted || ticket != _ticket) return;
       _busy(false);
-      _say(Line(false, reply, problem: problem));
+      _say(Line(false, reply, problem: problem), streamed: streamed);
     } on BrainException catch (error) {
       if (!mounted || ticket != _ticket) return;
+      if (streamed) await _voice.stop(quietly: true);
       _busy(false);
       _say(Line(false, error.message, problem: true));
     } catch (_) {
       if (!mounted || ticket != _ticket) return;
+      if (streamed) await _voice.stop(quietly: true);
       _busy(false);
       _say(const Line(false, Brain.declined, problem: true));
     }
@@ -509,8 +736,14 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _toggleMic() async {
+    // Tocar no microfone enquanto ela fala: ela para e ouve você.
+    if (_speaking) {
+      await _interrupt();
+      return;
+    }
     if (_listening || _handsFree) {
       _handsFree = false;
+      await _stopBarge();
       await _voice.stopListening();
       if (mounted) setState(() => _listening = false);
       _tellState();
@@ -522,6 +755,8 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _listen() async {
+    if (_listening) return;
+    await _holdWake(true);
     _capri.poke();
     _caught = false;
     var heard = '';
@@ -588,21 +823,39 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
   }
 
   Future<void> _float() async {
+    var floating = false;
     try {
-      if (await FlutterOverlayWindow.isActive()) {
-        await FlutterOverlayWindow.closeOverlay();
-        await Hands.ear(false);
-        _handsFree = false;
-        return;
-      }
+      floating = await FlutterOverlayWindow.isActive();
+    } catch (_) {}
+    if (floating) {
+      await _hideFloating();
+    } else {
+      await _showFloating();
+    }
+  }
+
+  Future<void> _hideFloating() async {
+    try {
+      await FlutterOverlayWindow.closeOverlay();
+    } catch (_) {}
+    // O ouvido em segundo plano continua se a palavra de ativação estiver ligada.
+    if (!_store.wake) await Hands.ear(false);
+    _handsFree = false;
+    _syncWake();
+  }
+
+  /// Solta a Capri flutuando. Com [quiet], não mostra avisos (aberturas por atalho). Devolve se ela está flutuando.
+  Future<bool> _showFloating({bool quiet = false}) async {
+    try {
+      if (await FlutterOverlayWindow.isActive()) return true;
       if (!await FlutterOverlayWindow.isPermissionGranted()) {
         final granted = await FlutterOverlayWindow.requestPermission();
         if (granted != true) {
           if (mounted) _notice('Para ela flutuar, permita "Aparecer sobre outros apps" para a Capri.');
-          return;
+          return false;
         }
       }
-      if (!mounted) return;
+      if (!mounted) return false;
       final screen = MediaQuery.of(context).size;
       await FlutterOverlayWindow.showOverlay(
         height: FloatingCapri.tall.round(),
@@ -613,19 +866,22 @@ class _ChatScreenState extends State<ChatScreen> with WidgetsBindingObserver {
         positionGravity: PositionGravity.none,
         flag: OverlayFlag.defaultFlag,
         overlayTitle: 'Capri',
-        overlayContent: 'Capri está flutuando. Para guardar, abra o app e toque no botão de janela.',
+        overlayContent: 'Capri está flutuando. Para guardar, use o botão Capri nas configurações rápidas ou o botão de janela no app.',
       );
       // Liga o serviço de microfone agora, com o app visível: é o que deixa ela ouvir depois, por cima de outros apps.
       final ear = await Hands.ear(true);
-      if (mounted) {
+      if (mounted && !quiet) {
         _notice(ear
             ? 'Ela está flutuando. Toque nela para conversar, por texto ou microfone. Toque neste botão de novo para guardar.'
             : 'Ela está flutuando, mas sem microfone. Aceite a permissão de microfone e toque neste botão duas vezes para ativar.');
       }
+      return true;
     } catch (_) {
       if (mounted) _notice('Não consegui abrir a janela flutuante neste aparelho.');
+      return false;
     }
   }
+
 
   Future<void> _openSettings() async {
     await Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => SettingsScreen(store: _store, brain: _brain)));

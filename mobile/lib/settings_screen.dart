@@ -1,4 +1,7 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
+import 'package:flutter_overlay_window/flutter_overlay_window.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import 'brain.dart';
@@ -31,6 +34,10 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
   bool _hidden = true;
   late final TextEditingController _voiceKey;
   late final TextEditingController _city;
+  late final TextEditingController _playlist;
+  Timer? _wakePoll;
+  String? _wakeNote;
+  bool _wakeBad = false;
   bool _accessOn = false;
   bool _noticesOn = false;
   final Voice _tester = Voice();
@@ -56,6 +63,8 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     _city = TextEditingController(text: _store.city ?? '');
     WidgetsBinding.instance.addObserver(this);
     _checkAccess();
+    _playlist = TextEditingController(text: _store.morningPlaylist);
+    if (_store.wake) _watchWake();
     final voiceId = _store.voiceId;
     if (voiceId != null) _voices = [VoiceEntry(voiceId, _store.voiceName ?? voiceId)];
     final voiceModel = _store.voiceModel;
@@ -76,6 +85,8 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
     _nickname.dispose();
     _voiceKey.dispose();
     _city.dispose();
+    _playlist.dispose();
+    _wakePoll?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     _tester.stop();
     _tester.dispose();
@@ -138,6 +149,128 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
         _noteBad = true;
       });
     }
+  }
+
+  /// Liga ou desliga a palavra de ativação. Na primeira vez, baixa o ouvido offline (31 MB).
+  Future<void> _setWake(bool on) async {
+    setState(() => _store.wake = on);
+    if (!on) {
+      _wakePoll?.cancel();
+      await Hands.wakeSet(false);
+      var floating = false;
+      try {
+        floating = await FlutterOverlayWindow.isActive();
+      } catch (_) {}
+      if (!floating) await Hands.ear(false);
+      if (mounted) setState(() => _wakeNote = 'Palavra de ativação desligada.');
+      return;
+    }
+    await Hands.wakePrepare();
+    await Hands.wakeSet(true);
+    final ear = await Hands.ear(true);
+    if (!ear && mounted) {
+      setState(() {
+        _wakeNote = 'Aceite a permissão de microfone e ligue de novo.';
+        _wakeBad = true;
+      });
+    }
+    _watchWake();
+  }
+
+  /// Acompanha o download e o estado do ouvido offline.
+  void _watchWake() {
+    _wakePoll?.cancel();
+    _wakePoll = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      final state = await Hands.wakeState();
+      if (!mounted) return;
+      final problem = '${state['problem'] ?? ''}';
+      setState(() {
+        if (problem.isNotEmpty) {
+          _wakeNote = problem;
+          _wakeBad = true;
+        } else if (state['downloading'] == true) {
+          _wakeNote = 'Baixando o ouvido offline: ${state['percent']}%';
+          _wakeBad = false;
+        } else if (state['ready'] == true) {
+          _wakeNote = state['listening'] == true ? 'Ouvindo "Capri". Diga o nome dela para chamar.' : 'Pronto. Ela ouve "Capri" quando não estiver conversando.';
+          _wakeBad = false;
+        }
+      });
+      if (problem.isNotEmpty || (state['ready'] == true && state['downloading'] != true && state['listening'] == true)) timer.cancel();
+    });
+  }
+
+  List<Widget> _callHer() {
+    return [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Palavra de ativação: "Capri"'),
+        subtitle: const Text(
+          'Diga "Capri" e ela aparece flutuando, já ouvindo. O reconhecimento roda offline no celular (download de 31 MB na primeira vez) e nada do que ele ouve sai do aparelho. Gasta mais bateria: desligue para poupar.',
+          style: TextStyle(color: Look.dim, fontSize: 12, height: 1.4),
+        ),
+        value: _store.wake,
+        onChanged: _setWake,
+      ),
+      if (_wakeNote != null)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Text(_wakeNote!, style: TextStyle(color: _wakeBad ? Look.yellow : Look.cyan, fontSize: 12, height: 1.4)),
+        ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Abrir ao ligar o celular'),
+        subtitle: const Text('Ela aparece flutuando quando o celular liga', style: TextStyle(color: Look.dim, fontSize: 12)),
+        value: _store.bootFloat,
+        onChanged: (value) => setState(() => _store.bootFloat = value),
+      ),
+      const SizedBox(height: 6),
+      const Text('Assistente padrão (botão lateral)', style: TextStyle(fontSize: 15)),
+      const SizedBox(height: 4),
+      const Text(
+        '1. Toque em "Escolher assistente" e, em "App de assistente digital", escolha a Capri.
+'
+        '2. No Galaxy, vá em Configurações > Recursos avançados > Botão lateral > Pressionar e manter, e escolha "Assistente digital".',
+        style: TextStyle(color: Look.dim, fontSize: 12, height: 1.5),
+      ),
+      const SizedBox(height: 6),
+      OutlinedButton(onPressed: Hands.openAssistantSettings, child: const Text('Escolher assistente')),
+      const SizedBox(height: 14),
+      const Text('Atalho e widget', style: TextStyle(fontSize: 15)),
+      const SizedBox(height: 4),
+      const Text(
+        'Atalho: abra a cortina, toque no lápis (editar) e arraste o botão "Capri" para os botões rápidos. Ele solta ou guarda a janela flutuante.
+'
+        'Widget: segure um espaço vazio da tela inicial, toque em Widgets e procure "Capri". Um toque nela abre a conversa.',
+        style: TextStyle(color: Look.dim, fontSize: 12, height: 1.5),
+      ),
+    ];
+  }
+
+  List<Widget> _routinesPart() {
+    return [
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Bom dia'),
+        subtitle: const Text('Dizer "bom dia" faz ela contar o clima e a agenda de hoje, e depois tocar a música abaixo', style: TextStyle(color: Look.dim, fontSize: 12, height: 1.4)),
+        value: _store.morning,
+        onChanged: (value) => setState(() => _store.morning = value),
+      ),
+      TextField(
+        controller: _playlist,
+        maxLength: 60,
+        onChanged: (value) => _store.morningPlaylist = value,
+        style: const TextStyle(fontFamily: Look.mono, color: Look.ink),
+        decoration: const InputDecoration(labelText: 'Música ou playlist do bom dia (opcional)', hintText: 'ex.: lofi para acordar', counterText: ''),
+      ),
+      const SizedBox(height: 10),
+      const Text(
+        'Modo jogo: diga "modo jogo" e ela flutua e passa a assistir e comentar a cada 3 minutos. "Desliga o modo jogo" volta como estava.
+'
+        'Agenda: "o que tenho amanhã?", "minha agenda da semana", "marca dentista sexta às 15h" (ela deixa pronto e você salva).',
+        style: TextStyle(color: Look.dim, fontSize: 12, height: 1.5),
+      ),
+    ];
   }
 
   /// Volta das configurações do Android: confere de novo se as permissões foram dadas.
@@ -241,6 +374,16 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
         _store.watchMinutes,
         (value) => _store.watchMinutes = value,
         about: 'Com ela flutuando, de tempos em tempos ela tira uma foto da tela e comenta o que você está jogando ou fazendo. Precisa de "Ver e controlar a tela". Com cérebro por chave, a foto vai para o provedor da chave; com o cérebro no celular, fica no aparelho e gasta mais bateria.',
+      ),
+      SwitchListTile(
+        contentPadding: EdgeInsets.zero,
+        title: const Text('Ler e responder mensagens'),
+        subtitle: const Text(
+          'Quando chega mensagem, ela lê em voz alta e pergunta se você quer responder ("responde que já vou"). Ela sempre mostra o texto e espera o seu "sim" antes de enviar. Precisa de "Ler notificações".',
+          style: TextStyle(color: Look.dim, fontSize: 12, height: 1.4),
+        ),
+        value: _store.readMessages,
+        onChanged: (value) => setState(() => _store.readMessages = value),
       ),
       SwitchListTile(
         contentPadding: EdgeInsets.zero,
@@ -597,6 +740,13 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
           ),
           SwitchListTile(
             contentPadding: EdgeInsets.zero,
+            title: const Text('Interromper falando por cima'),
+            subtitle: const Text('Numa conversa por voz, você fala e ela para para ouvir. Se ela se interromper sozinha (eco do alto-falante), desligue.', style: TextStyle(color: Look.dim, fontSize: 12, height: 1.4)),
+            value: _store.interrupt,
+            onChanged: (value) => setState(() => _store.interrupt = value),
+          ),
+          SwitchListTile(
+            contentPadding: EdgeInsets.zero,
             title: const Text('Conversa contínua'),
             subtitle: const Text('Depois de responder, o microfone abre de novo sozinho', style: TextStyle(color: Look.dim, fontSize: 12)),
             value: _store.continuous,
@@ -623,8 +773,12 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
             value: _store.intro,
             onChanged: (value) => setState(() => _store.intro = value),
           ),
+          _title('CHAMAR A CAPRI'),
+          ..._callHer(),
           _title('OLHOS E MÃOS'),
           ..._eyesAndHands(),
+          _title('ROTINAS E AGENDA'),
+          ..._routinesPart(),
           _title('JEITO DELA'),
           TextField(
             controller: _nickname,

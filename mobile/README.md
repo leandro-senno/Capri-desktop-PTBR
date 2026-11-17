@@ -19,6 +19,11 @@ Versão de bolso da Capri, refeita em Flutter a partir do app de Windows deste r
 - **Assistir você jogar** (opcional): flutuando, ela olha a tela a cada 1, 3 ou 5 minutos e comenta.
 - **Tocando agora e fechar apps**: "o que está tocando?" (precisa do acesso às notificações) e "fecha o Discord".
 - **Nível de inteligência e ajustes dela**: idioma (português, inglês, espanhol), tamanho, volume da voz, ritmo do passeio, quanto da conversa lembra, tempo do balão, efeito de digitação e dança.
+- **Conversa fluida**: ela começa a falar a primeira frase enquanto ainda pensa no resto, e numa conversa por voz você pode falar por cima para ela parar e ouvir (ou tocar no microfone).
+- **Chamar a Capri**: palavra de ativação "Capri" (offline, com o reconhecedor Vosk; opcional, gasta bateria), botão "Capri" nas configurações rápidas, widget animado na tela inicial, abrir flutuando ao ligar o celular e assistente padrão (segurar o botão lateral).
+- **Agenda**: "o que tenho amanhã?", "minha agenda da semana" e "marca dentista sexta às 15h" (abre o calendário preenchido para você salvar).
+- **Ler e responder mensagens** (opcional): ela lê a mensagem que chegou e, se você pedir, responde pelo botão de resposta da notificação, sempre depois do seu "sim".
+- **Rotinas**: "bom dia" (clima, agenda e uma música) e "modo jogo" (flutua e passa a assistir e comentar).
 - **Puxa conversa**: se você some por um tempo (10 min, 30 min ou 2 h, ou nunca), ela chama, com o app aberto ou flutuando, fora do horário de 23h às 8h.
 - **Conversa pela janela flutuante**: toque nela para abrir o balão. Dá para digitar ou falar pelo microfone; o botão de infinito liga a conversa contínua (o microfone abre de novo depois de cada resposta) e o de alto-falante liga o modo silencioso (ela só escreve). Quem responde é o app, então ele precisa continuar aberto ao fundo.
 - **Frases livres**: pedidos como "role a página do tiktok", "próximo vídeo", "pausa", "aumenta o volume" ou "curte esse vídeo" são entendidos sem fórmula fixa; quando a frase não bate com um comando conhecido, o cérebro escolhe a ação.

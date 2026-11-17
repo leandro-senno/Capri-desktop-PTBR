@@ -111,7 +111,15 @@ class _FloatingCapriState extends State<FloatingCapri> {
         final note = message['text'];
         if (note is String) setState(() => _reply = note);
       case 'talking':
-        _capri.talking = message['on'] == true;
+        final on = message['on'] == true;
+        // Ela começa a falar enquanto ainda pensa: sai do glitch de "pensando" para a boca aparecer.
+        if (on) _capri.thinking = false;
+        _capri.talking = on;
+      case 'open':
+        // Chamada pela palavra de ativação, widget ou assistente: abre o balão de conversa.
+        _touched = true;
+        _autoClose?.cancel();
+        if (!_open) _toggleChat();
       case 'state':
         setState(() {
           _voiceOn = message['voice'] != false;

@@ -33,6 +33,22 @@ jobs:
           flutter create --platforms=android --org com.leandrosenno --project-name capri .
           rm -rf test
           git checkout -- .
+          # Ouvido offline da palavra de ativação (Vosk) e as regras do R8 para ele.
+          cat >> android/app/build.gradle.kts <<'EOT'
+
+          dependencies {
+              implementation("net.java.dev.jna:jna:5.13.0@aar")
+              implementation("com.alphacephei:vosk-android:0.3.47@aar")
+          }
+
+          android {
+              buildTypes {
+                  getByName("release") {
+                      proguardFiles("proguard-rules.pro")
+                  }
+              }
+          }
+          EOT
       # Guarda a chave de assinatura entre as compilações, para o APK novo instalar por cima do antigo
       # sem apagar os dados (o cérebro baixado). Se o cache expirar, a chave muda e é preciso reinstalar.
       - uses: actions/cache@v4

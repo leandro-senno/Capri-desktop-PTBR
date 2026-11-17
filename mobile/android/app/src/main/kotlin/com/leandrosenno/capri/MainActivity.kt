@@ -11,8 +11,10 @@ import android.media.MediaMetadata
 import android.media.session.MediaSessionManager
 import android.media.session.PlaybackState
 import android.net.Uri
+import android.os.Bundle
 import android.os.BatteryManager
 import android.provider.AlarmClock
+import android.provider.CalendarContract
 import android.provider.ContactsContract
 import android.provider.MediaStore
 import android.provider.Settings
@@ -26,9 +28,46 @@ import io.flutter.plugin.common.MethodChannel
 /// As "mãos" da Capri no Android: apps, links, música, alarmes, contatos, bateria,
 /// e a ponte para os serviços de acessibilidade (tela) e de notificações.
 class MainActivity : FlutterActivity() {
+    private var channel: MethodChannel? = null
+
+    /// Por que o app foi aberto (widget, atalho, assistente, palavra de ativação, ao ligar), até o Dart perguntar.
+    private var pending: String? = null
+
+    /// O que o pedido de abertura quer: "listen" (conversar), "toggle" (soltar ou guardar) ou "float" (soltar).
+    private fun reason(intent: Intent?): String? {
+        if (intent == null) return null
+        intent.getStringExtra("capri")?.let { return it }
+        return when (intent.action) {
+            Intent.ACTION_ASSIST, Intent.ACTION_VOICE_COMMAND, "android.intent.action.SEARCH_LONG_PRESS" -> "listen"
+            else -> null
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        pending = reason(intent)
+        super.onCreate(savedInstanceState)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        val why = reason(intent) ?: return
+        val talk = channel
+        if (talk != null) talk.invokeMethod("launched", why) else pending = why
+    }
+
+    override fun onDestroy() {
+        CapriEar.onWake = null
+        channel = null
+        super.onDestroy()
+    }
+
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
-        MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "capri/hands").setMethodCallHandler { call, result ->
+        val hands = MethodChannel(flutterEngine.dartExecutor.binaryMessenger, "capri/hands")
+        channel = hands
+        // A palavra de ativação ouviu "Capri" com o app aberto: avisa o Dart, que decide o que mostrar.
+        CapriEar.onWake = { runOnUiThread { channel?.invokeMethod("wake", null) } }
+        hands.setMethodCallHandler { call, result ->
             if (call.method == "shot") {
                 // A foto da tela chega depois, por isso responde fora do fluxo comum.
                 val access = CapriAccess.instance
@@ -40,7 +79,7 @@ class MainActivity : FlutterActivity() {
             } catch (error: NotImplementedError) {
                 result.notImplemented()
             } catch (error: Exception) {
-                result.success(if (call.method == "apps" || call.method == "notices" || call.method == "tappable") emptyList<Map<String, Any>>() else if (call.method == "screen" || call.method == "contact" || call.method == "battery" || call.method == "playing") null else false)
+                result.success(if (call.method == "apps" || call.method == "notices" || call.method == "tappable") emptyList<Map<String, Any>>() else if (call.method == "screen" || call.method == "contact" || call.method == "battery" || call.method == "playing" || call.method == "launch" || call.method == "wakeState" || call.method == "events") null else false)
             }
         }
         EventChannel(flutterEngine.dartExecutor.binaryMessenger, "capri/notices").setStreamHandler(object : EventChannel.StreamHandler {
@@ -157,11 +196,74 @@ class MainActivity : FlutterActivity() {
                 true
             }
             "front" -> CapriAccess.instance?.front() ?: ""
+            "launch" -> pending.also { pending = null }
+            // Some com o app (vai para trás), deixando só a janela flutuante.
+            "hide" -> moveTaskToBack(true)
+            // Abre o app por cima (a partir da palavra de ativação, com o app em segundo plano).
+            "summon" -> start(Intent(this, MainActivity::class.java).putExtra("capri", text(call, "why")).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP))
+            "wakeState" -> CapriEar.state(this)
+            "wakePrepare" -> {
+                CapriEar.prepare(this)
+                true
+            }
+            "wakeSet" -> {
+                CapriEar.wantWake = call.argument<Boolean>("on") == true
+                CapriEar.refresh()
+                true
+            }
+            "wakeHold" -> {
+                CapriEar.held = call.argument<Boolean>("hold") == true
+                CapriEar.refresh()
+                true
+            }
+            "assistantSettings" -> start(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS)) || start(Intent(Settings.ACTION_VOICE_INPUT_SETTINGS))
+            "events" -> events(call.argument<Number>("from")?.toLong() ?: 0L, call.argument<Number>("to")?.toLong() ?: 0L)
+            // Abre o calendário com o compromisso preenchido; a pessoa confere e salva.
+            "newEvent" -> start(
+                Intent(Intent.ACTION_INSERT)
+                    .setData(CalendarContract.Events.CONTENT_URI)
+                    .putExtra(CalendarContract.Events.TITLE, text(call, "title"))
+                    .putExtra(CalendarContract.EXTRA_EVENT_BEGIN_TIME, call.argument<Number>("begin")?.toLong() ?: 0L)
+                    .putExtra(CalendarContract.EXTRA_EVENT_END_TIME, call.argument<Number>("end")?.toLong() ?: 0L)
+                    .putExtra(CalendarContract.EXTRA_EVENT_ALL_DAY, call.argument<Boolean>("allDay") == true)
+            )
+            "reply" -> CapriNotices.reply(this, text(call, "key"), text(call, "text"))
             "noticesOn" -> CapriNotices.connected
             "noticeSettings" -> start(Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS))
             "notices" -> CapriNotices.latest()
             else -> throw NotImplementedError()
         }
+    }
+
+    /// Os compromissos entre [from] e [to] (milissegundos). Sem a permissão, pede e devolve {"granted": false}.
+    private fun events(from: Long, to: Long): Map<String, Any> {
+        if (checkSelfPermission(Manifest.permission.READ_CALENDAR) != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(Manifest.permission.READ_CALENDAR), 9)
+            return mapOf("granted" to false)
+        }
+        val found = ArrayList<Map<String, Any>>()
+        val fields = arrayOf(
+            CalendarContract.Instances.TITLE,
+            CalendarContract.Instances.BEGIN,
+            CalendarContract.Instances.END,
+            CalendarContract.Instances.ALL_DAY,
+            CalendarContract.Instances.EVENT_LOCATION,
+        )
+        CalendarContract.Instances.query(contentResolver, fields, from, to)?.use { cursor ->
+            while (cursor.moveToNext() && found.size < 30) {
+                found.add(
+                    mapOf(
+                        "title" to (cursor.getString(0) ?: "(sem título)"),
+                        "begin" to cursor.getLong(1),
+                        "end" to cursor.getLong(2),
+                        "allDay" to (cursor.getInt(3) == 1),
+                        "place" to (cursor.getString(4) ?: ""),
+                    )
+                )
+            }
+        }
+        found.sortBy { it["begin"] as Long }
+        return mapOf("granted" to true, "events" to found)
     }
 
     /// O que está tocando agora, lido das sessões de mídia. Precisa do acesso às notificações.

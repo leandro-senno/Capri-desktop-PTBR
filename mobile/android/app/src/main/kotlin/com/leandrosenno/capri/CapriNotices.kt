@@ -1,6 +1,10 @@
 package com.leandrosenno.capri
 
 import android.app.Notification
+import android.app.RemoteInput
+import android.content.Context
+import android.content.Intent
+import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
 import android.service.notification.NotificationListenerService
@@ -16,6 +20,26 @@ class CapriNotices : NotificationListenerService() {
         var connected = false
 
         fun latest(): List<Map<String, Any>> = synchronized(recent) { recent.toList() }
+
+        /// O botão "responder" de cada notificação recente, pela chave dela.
+        private val replies = LinkedHashMap<String, Notification.Action>()
+
+        /// Responde a uma notificação pelo próprio botão de resposta dela (como responder pela cortina).
+        /// Só é chamado depois que a pessoa confirmou o texto na conversa.
+        fun reply(context: Context, key: String, text: String): Boolean {
+            val action = synchronized(replies) { replies[key] } ?: return false
+            val inputs = action.remoteInputs ?: return false
+            return try {
+                val intent = Intent()
+                val results = Bundle()
+                for (input in inputs) results.putCharSequence(input.resultKey, text)
+                RemoteInput.addResultsToIntent(inputs, intent, results)
+                action.actionIntent.send(context, 0, intent)
+                true
+            } catch (error: Exception) {
+                false
+            }
+        }
     }
 
     override fun onListenerConnected() {
@@ -39,7 +63,18 @@ class CapriNotices : NotificationListenerService() {
         } catch (error: Exception) {
             sbn.packageName
         }
+        val answer = notification.actions?.firstOrNull { action ->
+            action.remoteInputs?.any { it.allowFreeFormInput } == true
+        }
+        if (answer != null) {
+            synchronized(replies) {
+                replies[sbn.key] = answer
+                while (replies.size > 30) replies.remove(replies.keys.first())
+            }
+        }
         val item = mapOf<String, Any>(
+            "key" to sbn.key,
+            "canReply" to (answer != null),
             "app" to app,
             "title" to title.take(120),
             "text" to text.take(300),

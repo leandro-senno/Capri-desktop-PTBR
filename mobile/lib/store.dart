@@ -170,6 +170,32 @@ class Store {
   int get watchMinutes => _prefs.getInt('watch_minutes') ?? 0;
   set watchMinutes(int value) => _prefs.setInt('watch_minutes', value);
 
+  /// Interromper: com a voz ligada, ela ouve enquanto fala e para quando você fala por cima.
+  bool get interrupt => _prefs.getBool('interrupt') ?? true;
+  set interrupt(bool value) => _prefs.setBool('interrupt', value);
+
+  /// Palavra de ativação: ela fica ouvindo "Capri" (offline, gasta mais bateria).
+  bool get wake => _prefs.getBool('wake') ?? false;
+  set wake(bool value) => _prefs.setBool('wake', value);
+
+  /// Soltar flutuando quando o celular liga. O nome é lido também pelo lado nativo (CapriBoot).
+  bool get bootFloat => _prefs.getBool('boot_float') ?? false;
+  set bootFloat(bool value) => _prefs.setBool('boot_float', value);
+
+  /// Ler mensagens que chegam e ajudar a responder, sempre confirmando antes de enviar.
+  bool get readMessages => _prefs.getBool('read_messages') ?? false;
+  set readMessages(bool value) => _prefs.setBool('read_messages', value);
+
+  /// Rotina do "bom dia" e a música que ela toca.
+  bool get morning => _prefs.getBool('morning') ?? true;
+  set morning(bool value) => _prefs.setBool('morning', value);
+  String get morningPlaylist => _prefs.getString('morning_playlist') ?? '';
+  set morningPlaylist(String value) => _prefs.setString('morning_playlist', value.trim());
+
+  /// O "assistir e comentar" de antes do modo jogo, para voltar ao sair dele.
+  int get gameSavedWatch => _prefs.getInt('game_saved_watch') ?? 0;
+  set gameSavedWatch(int value) => _prefs.setInt('game_saved_watch', value);
+
   /// Conversa contínua: depois de responder, o microfone abre de novo sozinho.
   bool get continuous => _prefs.getBool('continuous') ?? true;
   set continuous(bool value) => _prefs.setBool('continuous', value);
