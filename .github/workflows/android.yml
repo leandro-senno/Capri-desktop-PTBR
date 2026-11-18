@@ -9,7 +9,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  # Para publicar o APK como arquivo direto (sem zip) na página de releases.
+  contents: write
 
 jobs:
   apk:
@@ -56,6 +57,12 @@ jobs:
           }
 
           android {
+              // Só o processador do celular (arm64, o do S25 FE): o reconhecedor de voz traria os de todos os tipos.
+              defaultConfig {
+                  ndk {
+                      abiFilters += listOf("arm64-v8a")
+                  }
+              }
               buildTypes {
                   getByName("release") {
                       proguardFiles("proguard-rules.pro")
@@ -77,3 +84,15 @@ jobs:
         with:
           name: capri-android
           path: mobile/build/app/outputs/flutter-apk/app-release.apk
+      # O APK direto, num link que não muda, sem precisar extrair:
+      # https://github.com/leandro-senno/Capri-desktop-PTBR/releases/download/android-latest/capri.apk
+      - name: Publicar o APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp build/app/outputs/flutter-apk/app-release.apk capri.apk
+          ls -l capri.apk
+          gh release delete android-latest --yes --cleanup-tag || true
+          gh release create android-latest capri.apk --prerelease --target "${{ github.sha }}" \
+            --title "Capri para Android (última versão)" \
+            --notes "Instale o capri.apk direto no celular, por cima da versão anterior. Compilado de ${{ github.sha }}."
