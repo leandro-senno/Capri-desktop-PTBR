@@ -189,7 +189,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
           _wakeNote = problem;
           _wakeBad = true;
         } else if (state['downloading'] == true) {
-          _wakeNote = 'Baixando o ouvido offline: ${state['percent']}%';
+          _wakeNote = 'Preparando o ouvido offline: ${state['percent']}%';
           _wakeBad = false;
         } else if (state['ready'] == true) {
           _wakeNote = state['listening'] == true ? 'Ouvindo "Capri". Diga o nome dela para chamar.' : 'Pronto. Ela ouve "Capri" quando não estiver conversando.';
@@ -206,7 +206,7 @@ class _SettingsScreenState extends State<SettingsScreen> with WidgetsBindingObse
         contentPadding: EdgeInsets.zero,
         title: const Text('Palavra de ativação: "Capri"'),
         subtitle: const Text(
-          'Diga "Capri" e ela aparece flutuando, já ouvindo. O reconhecimento roda offline no celular (download de 31 MB na primeira vez) e nada do que ele ouve sai do aparelho. Gasta mais bateria: desligue para poupar.',
+          'Diga "Capri" e ela aparece flutuando, já ouvindo. O reconhecimento roda offline no celular, já vem dentro do app, e nada do que ele ouve sai do aparelho. Gasta mais bateria: desligue para poupar.',
           style: TextStyle(color: Look.dim, fontSize: 12, height: 1.4),
         ),
         value: _store.wake,

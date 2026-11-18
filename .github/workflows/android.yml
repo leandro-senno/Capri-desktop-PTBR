@@ -33,6 +33,17 @@ jobs:
           flutter create --platforms=android --org com.leandrosenno --project-name capri .
           rm -rf test
           git checkout -- .
+          # Modelo de fala offline da palavra de ativação (32 MB), posto dentro do app para o celular não precisar baixar.
+          curl -fsSL --retry 5 --retry-delay 5 -o /tmp/vosk.zip https://huggingface.co/rhasspy/vosk-models/resolve/main/pt/vosk-model-small-pt-0.3.zip \
+            || curl -fsSL --retry 5 --retry-delay 5 -o /tmp/vosk.zip https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip
+          rm -rf /tmp/vosk && unzip -q /tmp/vosk.zip -d /tmp/vosk
+          mdl=$(find /tmp/vosk -path '*/am/final.mdl' | head -1)
+          test -n "$mdl"
+          mkdir -p android/app/src/main/assets
+          rm -rf android/app/src/main/assets/vosk-pt
+          cp -r "$(dirname "$(dirname "$mdl")")" android/app/src/main/assets/vosk-pt
+          find android/app/src/main/assets/vosk-pt -type f | head -40
+          du -sh android/app/src/main/assets/vosk-pt
           # Ouvido offline da palavra de ativação (Vosk) e as regras do R8 para ele.
           cat >> android/app/build.gradle.kts <<'EOT'
 

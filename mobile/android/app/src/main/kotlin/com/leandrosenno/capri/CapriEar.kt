@@ -20,6 +20,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.net.HttpURLConnection
 import java.net.URL
+import java.util.zip.ZipFile
 import java.util.zip.ZipInputStream
 
 /// O ouvido da Capri em segundo plano.
@@ -46,8 +47,13 @@ class CapriEar : Service() {
 
         private var instance: CapriEar? = null
 
-        // Modelo de fala em português (31 MB), baixado uma vez.
-        private const val MODEL_URL = "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip"
+        // Modelo de fala em português (32 MB). Vem dentro do app (pasta assets/vosk-pt, posta na compilação)
+        // e é copiado uma vez para os arquivos do app. Se não vier, é baixado, de um destes endereços.
+        private val MODEL_URLS = listOf(
+            "https://huggingface.co/rhasspy/vosk-models/resolve/main/pt/vosk-model-small-pt-0.3.zip",
+            "https://alphacephei.com/vosk/models/vosk-model-small-pt-0.3.zip",
+        )
+        private const val ASSET = "vosk-pt"
         private var model: Model? = null
 
         @Volatile
@@ -61,7 +67,8 @@ class CapriEar : Service() {
 
         fun folder(context: Context) = File(context.filesDir, "vosk-pt")
 
-        fun modelReady(context: Context) = File(folder(context), "conf/model.conf").exists() || File(folder(context), "am/final.mdl").exists()
+        /// Pronto só quando a instalação terminou inteira (o marcador é escrito por último).
+        fun modelReady(context: Context) = File(folder(context), ".capri-ready").exists() && File(folder(context), "am/final.mdl").exists()
 
         fun state(context: Context): Map<String, Any> = mapOf(
             "ready" to modelReady(context),
@@ -71,7 +78,7 @@ class CapriEar : Service() {
             "listening" to (instance?.speech != null),
         )
 
-        /// Baixa e descompacta o modelo, numa thread separada.
+        /// Instala o modelo numa thread separada: copia de dentro do app ou, se não houver, baixa.
         fun prepare(context: Context) {
             if (downloading || modelReady(context)) return
             downloading = true
@@ -79,53 +86,125 @@ class CapriEar : Service() {
             problem = null
             val app = context.applicationContext
             Thread {
-                val zip = File(app.cacheDir, "vosk-pt.zip")
                 try {
-                    val connection = URL(MODEL_URL).openConnection() as HttpURLConnection
-                    connection.connectTimeout = 20000
-                    connection.readTimeout = 30000
-                    val total = connection.contentLengthLong
-                    connection.inputStream.use { input ->
-                        FileOutputStream(zip).use { output ->
-                            val buffer = ByteArray(64 * 1024)
-                            var got = 0L
-                            while (true) {
-                                val read = input.read(buffer)
-                                if (read < 0) break
-                                output.write(buffer, 0, read)
-                                got += read
-                                if (total > 0) percent = (got * 95 / total).toInt()
-                            }
-                        }
-                    }
                     val target = folder(app)
-                    target.deleteRecursively()
-                    target.mkdirs()
-                    ZipInputStream(zip.inputStream()).use { unzip ->
-                        while (true) {
-                            val entry = unzip.nextEntry ?: break
-                            // Tira a pasta de cima do zip ("vosk-model-small-pt-0.3/...").
-                            val inside = entry.name.substringAfter('/', "")
-                            if (inside.isEmpty() || inside.contains("..")) continue
-                            val out = File(target, inside)
-                            if (entry.isDirectory) {
-                                out.mkdirs()
-                            } else {
-                                out.parentFile?.mkdirs()
-                                FileOutputStream(out).use { unzip.copyTo(it) }
-                            }
-                        }
-                    }
+                    target.deleteRecursively() // tentativa anterior pela metade
+                    if (!copyBundled(app, target)) download(app, target)
+                    if (!File(target, "am/final.mdl").exists()) throw IllegalStateException("modelo sem am/final.mdl")
+                    File(target, ".capri-ready").writeText("ok")
                     percent = 100
-                    if (!modelReady(app)) problem = "O modelo baixado veio incompleto."
                 } catch (error: Exception) {
-                    problem = "Não consegui baixar o ouvido offline. Confira a internet e tente de novo."
+                    folder(app).deleteRecursively()
+                    problem = "Não consegui instalar o ouvido offline (${error.javaClass.simpleName}: ${error.message ?: "sem detalhe"}). Confira a internet e tente de novo."
                 } finally {
-                    zip.delete()
                     downloading = false
                     Handler(Looper.getMainLooper()).post { instance?.apply() }
                 }
             }.start()
+        }
+
+        /// Copia o modelo que veio dentro do app. Devolve false se o app não trouxe o modelo.
+        private fun copyBundled(context: Context, target: File): Boolean {
+            val assets = context.assets
+            val top = try {
+                assets.list(ASSET)
+            } catch (error: Exception) {
+                null
+            }
+            if (top.isNullOrEmpty()) return false
+            val files = ArrayList<String>()
+            fun walk(path: String) {
+                val inside = assets.list(path) ?: emptyArray()
+                if (inside.isEmpty()) files.add(path) else inside.forEach { walk("$path/$it") }
+            }
+            walk(ASSET)
+            files.forEachIndexed { index, path ->
+                val out = File(target, path.removePrefix("$ASSET/"))
+                out.parentFile?.mkdirs()
+                assets.open(path).use { input -> FileOutputStream(out).use { input.copyTo(it) } }
+                percent = (index + 1) * 99 / files.size
+            }
+            return true
+        }
+
+        /// Baixa o zip, retomando de onde parou se a conexão cair, confere se veio inteiro e descompacta.
+        private fun download(context: Context, target: File) {
+            val zip = File(context.cacheDir, "vosk-pt.zip")
+            var last: Exception? = null
+            try {
+                for (address in MODEL_URLS) {
+                    zip.delete()
+                    var total = -1L
+                    for (attempt in 1..6) {
+                        try {
+                            val got = zip.length()
+                            val connection = URL(address).openConnection() as HttpURLConnection
+                            connection.connectTimeout = 20000
+                            connection.readTimeout = 30000
+                            connection.instanceFollowRedirects = true
+                            if (got > 0) connection.setRequestProperty("Range", "bytes=$got-")
+                            val code = connection.responseCode
+                            val resumed = code == 206
+                            if (code != 200 && !resumed) throw IllegalStateException("HTTP $code")
+                            if (!resumed) zip.delete()
+                            val length = connection.contentLengthLong
+                            if (length > 0) total = if (resumed) got + length else length
+                            connection.inputStream.use { input ->
+                                FileOutputStream(zip, resumed).use { output ->
+                                    val buffer = ByteArray(64 * 1024)
+                                    while (true) {
+                                        val read = input.read(buffer)
+                                        if (read < 0) break
+                                        output.write(buffer, 0, read)
+                                        if (total > 0) percent = (zip.length() * 90 / total).toInt()
+                                    }
+                                }
+                            }
+                            if (total > 0 && zip.length() < total) throw IllegalStateException("veio ${zip.length()} de $total bytes")
+                            unzip(zip, target)
+                            return
+                        } catch (error: Exception) {
+                            last = error
+                            Thread.sleep(1500L * attempt)
+                        }
+                    }
+                }
+                throw last ?: IllegalStateException("download falhou")
+            } finally {
+                zip.delete()
+            }
+        }
+
+        /// Descompacta e acha a pasta do modelo (a que tem am/final.mdl), seja qual for o nome dentro do zip.
+        private fun unzip(zip: File, target: File) {
+            ZipFile(zip).close() // falha aqui se o zip veio cortado
+            val scratch = File(target.parentFile, "vosk-unzip")
+            scratch.deleteRecursively()
+            scratch.mkdirs()
+            try {
+                ZipInputStream(zip.inputStream()).use { unzip ->
+                    while (true) {
+                        val entry = unzip.nextEntry ?: break
+                        val out = File(scratch, entry.name)
+                        if (!out.canonicalPath.startsWith(scratch.canonicalPath)) continue
+                        if (entry.isDirectory) {
+                            out.mkdirs()
+                        } else {
+                            out.parentFile?.mkdirs()
+                            FileOutputStream(out).use { unzip.copyTo(it) }
+                        }
+                    }
+                }
+                val mdl = scratch.walkTopDown().firstOrNull { it.name == "final.mdl" && it.parentFile?.name == "am" }
+                    ?: throw IllegalStateException("modelo sem am/final.mdl")
+                val root = mdl.parentFile!!.parentFile!!
+                target.deleteRecursively()
+                if (!root.renameTo(target)) {
+                    root.copyRecursively(target, overwrite = true)
+                }
+            } finally {
+                scratch.deleteRecursively()
+            }
         }
 
         /// Reaplica o estado (ligar ou pausar a escuta da palavra de ativação).
