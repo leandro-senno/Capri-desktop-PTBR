@@ -67,8 +67,11 @@ class CapriEar : Service() {
 
         fun folder(context: Context) = File(context.filesDir, "vosk-pt")
 
+        /// O arquivo principal do modelo: solto na pasta (formato antigo, o deste modelo) ou dentro de am/ (formato novo).
+        private fun hasModel(dir: File) = File(dir, "final.mdl").exists() || File(dir, "am/final.mdl").exists()
+
         /// Pronto só quando a instalação terminou inteira (o marcador é escrito por último).
-        fun modelReady(context: Context) = File(folder(context), ".capri-ready").exists() && File(folder(context), "am/final.mdl").exists()
+        fun modelReady(context: Context) = File(folder(context), ".capri-ready").exists() && hasModel(folder(context))
 
         fun state(context: Context): Map<String, Any> = mapOf(
             "ready" to modelReady(context),
@@ -90,7 +93,7 @@ class CapriEar : Service() {
                     val target = folder(app)
                     target.deleteRecursively() // tentativa anterior pela metade
                     if (!copyBundled(app, target)) download(app, target)
-                    if (!File(target, "am/final.mdl").exists()) throw IllegalStateException("modelo sem am/final.mdl")
+                    if (!hasModel(target)) throw IllegalStateException("modelo sem final.mdl")
                     File(target, ".capri-ready").writeText("ok")
                     percent = 100
                 } catch (error: Exception) {
@@ -195,9 +198,10 @@ class CapriEar : Service() {
                         }
                     }
                 }
-                val mdl = scratch.walkTopDown().firstOrNull { it.name == "final.mdl" && it.parentFile?.name == "am" }
-                    ?: throw IllegalStateException("modelo sem am/final.mdl")
-                val root = mdl.parentFile!!.parentFile!!
+                val mdl = scratch.walkTopDown().firstOrNull { it.name == "final.mdl" }
+                    ?: throw IllegalStateException("modelo sem final.mdl")
+                val folder = mdl.parentFile!!
+                val root = if (folder.name == "am") folder.parentFile!! else folder
                 target.deleteRecursively()
                 if (!root.renameTo(target)) {
                     root.copyRecursively(target, overwrite = true)
